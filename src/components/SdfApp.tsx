@@ -12,9 +12,9 @@ export const sdfHeadLinks = [
 
 export function SdfApp() {
   useEffect(() => {
-    // O bundle legado declara variáveis no escopo global (script clássico).
-    // Executá-lo duas vezes causa "Identifier 'x' has already been declared"
-    // e deixa a tela em branco — por isso ele é montado uma única vez.
+    // O bundle legado declara variaveis no escopo global (script classico).
+    // Executa-lo duas vezes causa "Identifier 'x' has already been declared"
+    // e deixa a tela em branco — por isso ele e montado uma unica vez.
     const w = window as unknown as { __sdfAppMounted?: boolean };
     if (w.__sdfAppMounted) return;
     if (document.getElementById("sdf-app-bundle")) return;
@@ -30,6 +30,7 @@ export function SdfApp() {
       "sdf-saved-accounts",
       "sdf-task-helper",
       "sdf-notas",
+      "sdf-empty-tasks-note",
     ]) {
       if (document.getElementById(id)) continue;
       const extras = document.createElement("script");
