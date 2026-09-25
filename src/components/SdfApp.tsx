@@ -20,9 +20,20 @@ export function SdfApp() {
     if (document.getElementById("sdf-app-bundle")) return;
     w.__sdfAppMounted = true;
 
+    // A ponte precisa rodar antes do bundle principal (corrige o token de
+    // tarefas quando o servidor e bloqueado). async=false preserva a ordem.
+    if (!document.getElementById("sdf-edusp-bridge")) {
+      const bridge = document.createElement("script");
+      bridge.id = "sdf-edusp-bridge";
+      bridge.src = "/sdf-edusp-bridge.js";
+      bridge.async = false;
+      document.body.appendChild(bridge);
+    }
+
     const script = document.createElement("script");
     script.id = "sdf-app-bundle";
     script.src = "/sdf-app.js";
+    script.async = false;
     document.body.appendChild(script);
 
     for (const id of [
