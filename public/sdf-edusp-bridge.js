@@ -14,44 +14,79 @@
   var pending = null;
 
   function readSession() {
-    try { return JSON.parse(localStorage.getItem(SESSION_KEY) || "null"); } catch (e) { return null; }
+    try {
+      return JSON.parse(localStorage.getItem(SESSION_KEY) || "null");
+    } catch (e) {
+      return null;
+    }
   }
+
   function saveSession(s) {
-    try { localStorage.setItem(SESSION_KEY, JSON.stringify(s)); } catch (e) {}
+    try {
+      localStorage.setItem(SESSION_KEY, JSON.stringify(s));
+    } catch (e) {}
   }
+
+  function clearSession() {
+    try {
+      localStorage.removeItem(SESSION_KEY);
+    } catch (e) {}
+  }
+
   function needsExchange(s) {
     return !!(s && s.token && (!s.token2 || s.token2 === s.token || s.eduspUnavailable));
   }
 
   function exchange(sedToken) {
+    if (!sedToken) return Promise.resolve(null);
     if (pending) return pending;
-    pending = originalFetch(EXCHANGE_URL, {
-      method: "POST",
-      headers: {
-        Accept: "application/json",
-        "Content-Type": "application/json",
-        "x-api-platform": "webclient",
-        "x-api-realm": "edusp",
-      },
-      body: JSON.stringify({ token: sedToken }),
-    })
-      .then(function (r) { return r.ok ? r.json() : null; })
-      .then(function (d) { return d && d.auth_token ? d : null; })
-      .catch(function () { return null; })
-      .finally(function () { setTimeout(function () { pending = null; }, 0); });
-    return pending;
+    try {
+      pending = originalFetch(EXCHANGE_URL, {
+        method: "POST",
+        headers: {
+          Accept: "application/json",
+          "Content-Type": "application/json",
+          "x-api-platform": "webclient",
+          "x-api-realm": "edusp",
+        },
+        body: JSON.stringify({ token: sedToken }),
+      })
+        .then(function (r) {
+          return r && r.ok ? r.json() : null;
+        })
+        .then(function (d) {
+          return d && d.auth_token ? d : null;
+        })
+        .catch(function (err) {
+          console.warn("[EduX Bridge] Falha ao trocar token no edusp-api.ip.tv:", err && err.message);
+          return null;
+        })
+        .finally(function () {
+          setTimeout(function () {
+            pending = null;
+          }, 0);
+        });
+      return pending;
+    } catch (e) {
+      pending = null;
+      return Promise.resolve(null);
+    }
   }
 
   async function fixSession() {
-    var s = readSession();
-    if (!needsExchange(s)) return s;
-    var d = await exchange(s.token);
-    if (!d) return s;
-    s.token2 = d.auth_token;
-    s.eduspUnavailable = false;
-    if (d.nick && !s.apelido) s.apelido = String(d.nick).replace(/-sp$/i, "");
-    saveSession(s);
-    return s;
+    try {
+      var s = readSession();
+      if (!needsExchange(s)) return s;
+      var d = await exchange(s.token);
+      if (!d) return s;
+      s.token2 = d.auth_token;
+      s.eduspUnavailable = false;
+      if (d.nick && !s.apelido) s.apelido = String(d.nick).replace(/-sp$/i, "");
+      saveSession(s);
+      return s;
+    } catch (e) {
+      return readSession();
+    }
   }
 
   function urlOf(input) {
@@ -63,39 +98,91 @@
   window.fetch = async function (input, init) {
     var url = urlOf(input);
     var isWorker = url.indexOf("/api/") !== -1 && url.indexOf("edusp-api.ip.tv") === -1;
-    if (!isWorker) return originalFetch(input, init);
+    if (!isWorker) {
+      return originalFetch(input, init);
+    }
 
-    // Login: se o servidor nao conseguiu o token de tarefas, troca no navegador.
-    if (/\/login(\?|$)/.test(url)) {
-      var resp = await originalFetch(input, init);
-      if (!resp.ok) return resp;
-      var text = await resp.clone().text();
-      var data;
-      try { data = JSON.parse(text); } catch (e) { return resp; }
-      if (data && data.token && (data.eduspUnavailable || data.token2 === data.token)) {
-        var d = await exchange(data.token);
-        if (d) {
-          data.token2 = d.auth_token;
-          data.eduspUnavailable = false;
-          delete data.aviso;
-          var headers = new Headers(resp.headers);
-          headers.delete("content-length");
-          return new Response(JSON.stringify(data), { status: resp.status, headers: headers });
+    try {
+      // Login: se o servidor nao conseguiu o token de tarefas, troca no navegador.
+      if (/\/login(\?|$)/.test(url)) {
+        var resp;
+        try {
+          resp = await originalFetch(input, init);
+        } catch (fetchErr) {
+          console.error("[EduX] Erro de rede ao conectar à API de login:", fetchErr);
+          return new Response(
+            JSON.stringify({
+              erro: "Falha de rede ao conectar ao servidor do EduX. Verifique sua conexão ou bloqueador de anúncios.",
+              detalhe: String(fetchErr && fetchErr.message || fetchErr),
+            }),
+            {
+              status: 503,
+              headers: { "Content-Type": "application/json" },
+            }
+          );
         }
-      }
-      return resp;
-    }
 
-    // Demais chamadas: garante que o X-Token2 seja o token de tarefas.
-    var s = readSession();
-    if (needsExchange(s)) {
-      s = await fixSession();
-      if (s && s.token2 && s.token2 !== s.token) {
-        var h = new Headers((init && init.headers) || (input && input.headers) || {});
-        if (h.has("X-Token2")) h.set("X-Token2", s.token2);
-        init = Object.assign({}, init || {}, { headers: h });
+        if (!resp.ok) return resp;
+        var text = await resp.clone().text();
+        var data;
+        try {
+          data = JSON.parse(text);
+        } catch (e) {
+          return resp;
+        }
+
+        if (data && data.token && (data.eduspUnavailable || data.token2 === data.token)) {
+          var d = await exchange(data.token);
+          if (d && d.auth_token) {
+            data.token2 = d.auth_token;
+            data.eduspUnavailable = false;
+            delete data.aviso;
+            var headers = new Headers(resp.headers);
+            headers.delete("content-length");
+            return new Response(JSON.stringify(data), { status: resp.status, headers: headers });
+          }
+        }
+        return resp;
       }
+
+      // Demais chamadas internas (/api/...): garante que o X-Token2 seja o token de tarefas
+      var s = readSession();
+      if (needsExchange(s)) {
+        s = await fixSession();
+      }
+
+      var finalInit = init ? Object.assign({}, init) : {};
+      if (s && s.token2) {
+        var h = new Headers(finalInit.headers || (input && typeof input === "object" && input.headers) || {});
+        if (!h.has("X-Token2") || h.get("X-Token2") === s.token) {
+          h.set("X-Token2", s.token2);
+        }
+        finalInit.headers = h;
+      }
+
+      try {
+        return await originalFetch(input, finalInit);
+      } catch (err) {
+        console.warn("[EduX] Falha no fetch interno:", url, err && err.message);
+        return new Response(
+          JSON.stringify({
+            erro: "Não foi possível carregar os dados no momento (falha de conexão).",
+            detalhe: String(err && err.message || err),
+          }),
+          {
+            status: 503,
+            headers: { "Content-Type": "application/json" },
+          }
+        );
+      }
+    } catch (outerErr) {
+      console.error("[EduX Bridge] Erro inesperado na interceptação:", outerErr);
+      return originalFetch(input, init);
     }
-    return originalFetch(input, init);
+  };
+
+  window.__eduxResetSession = function () {
+    clearSession();
+    window.location.reload();
   };
 })();
