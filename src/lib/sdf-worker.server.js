@@ -199,13 +199,13 @@ function taskRoomTarget(task, fallback = "") {
 }
 function normalizeTask(task, roomName = "") {
   const due = task?.apply_moment ?? task?.applyMoment ?? task?.due_date ?? task?.dueDate ?? task?.deadline ?? null;
-  const rawStatus = String(task?.answer_status ?? task?.status ?? "pending").toLowerCase();
-  // A API oficial usa answer_status=pending mesmo quando apply_moment já passou.
-  // A data não pode transformar uma tarefa não respondida em expired, senão
-  // tarefas pendentes legítimas desaparecem do cartão "Tarefas pendentes".
-  let status = rawStatus || "pending";
+  // A API oficial consulta answer_statuses=draft e devolve answer_status=null
+  // quando o aluno ainda não iniciou a atividade. Esse é o estado de rascunho,
+  // não "pending"; manter a distinção evita que o frontend zere o contador.
+  const rawStatus = String(task?.answer_status ?? task?.status ?? "draft").toLowerCase();
+  let status = rawStatus || "draft";
   const answered = ["submitted", "completed", "done", "finished"].includes(status);
-  if (!answered && !["expired", "overdue"].includes(status)) status = "pending";
+  if (!answered && !["expired", "overdue"].includes(status)) status = "draft";
   if (["overdue"].includes(status)) status = "expired";
   return {
     id: task?.id ?? task?.task_id ?? task?.taskId ?? null,
@@ -444,8 +444,8 @@ async function fetchTasks(token2, rooms, username) {
     if (seen.has(id)) continue;
     seen.add(id);
     const task = normalizeTask(raw, findRoomForTask(raw, rooms));
-    // Somente tarefas pendentes: entregues e expiradas ficam de fora.
-    if (task.status !== "pending") continue;
+    // Somente rascunhos: entregues e expiradas ficam de fora.
+    if (task.status !== "draft") continue;
     const answered = raw?.answer_status ?? raw?.answerStatus ?? null;
     if (answered && !["pending", "draft"].includes(String(answered).toLowerCase())) continue;
     tasks.push(task);
@@ -1128,7 +1128,7 @@ async function handleDashboard(request) {
   const alunoData = aluno?.data && typeof aluno.data === "object" ? aluno.data : aluno;
   return jsonResponse({
     aluno: alunoData || {}, turmas: rooms, tarefas: taskResult.tasks,
-    pendencias: taskResult.tasks.filter((t) => t.status === "pending").length,
+    pendencias: taskResult.tasks.filter((t) => t.status === "draft").length,
 
     faltas: faltasResult.total, mensagensNaoLidas: notificationsResult.unread, mensagens: notificationsResult.total,
     targets: taskResult.targets, tarefasApiOk: taskResult.ok, tarefasApiStatus: taskResult.status,
