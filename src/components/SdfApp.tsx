@@ -25,12 +25,30 @@ export function SdfApp() {
     script.src = "/sdf-app.js";
     document.body.appendChild(script);
 
-    for (const id of [
-      "sdf-question-widgets",
-      "sdf-saved-accounts",
-      "sdf-task-helper",
-      "sdf-notas",
-    ]) {
+    const removeTaskUi = () => {
+      if (window.location.pathname === "/tarefas") {
+        window.history.replaceState({}, "", "/");
+        window.dispatchEvent(new PopStateEvent("popstate"));
+      }
+      document.querySelectorAll('a[href="/tarefas"]').forEach((link) => {
+        const container = link.closest(".stat-link, .text-link");
+        (container || link).remove();
+      });
+      document
+        .querySelectorAll(".rail-nav a, .bottom-nav a, .login-utility-list span")
+        .forEach((item) => {
+          if (item.textContent?.trim().toLocaleLowerCase("pt-BR").includes("tarefa")) item.remove();
+        });
+      document.querySelectorAll("section.section-block").forEach((section) => {
+        if (section.textContent?.toLocaleLowerCase("pt-BR").includes("atividades pendentes"))
+          section.remove();
+      });
+    };
+    const taskUiObserver = new MutationObserver(removeTaskUi);
+    taskUiObserver.observe(document.body, { childList: true, subtree: true });
+    removeTaskUi();
+
+    for (const id of ["sdf-saved-accounts", "sdf-notas"]) {
       if (document.getElementById(id)) continue;
       const extras = document.createElement("script");
       extras.id = id;

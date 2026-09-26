@@ -110,8 +110,16 @@ function currentAnoLetivo() {
 function numberValue(value) {
   if (typeof value === "number" && Number.isFinite(value)) return value;
   if (typeof value === "string" && value.trim()) {
-    const n = Number(value.replace(",", "."));
+    const cleaned = value.trim().replace(/%$/, "").replace(/\.(?=\d{3}(?:\D|$))/g, "").replace(",", ".");
+    const n = Number(cleaned);
     return Number.isFinite(n) ? n : null;
+  }
+  return null;
+}
+function firstValue(row, keys) {
+  for (const key of keys) {
+    const value = row?.[key];
+    if (value !== null && value !== undefined && value !== "") return value;
   }
   return null;
 }
@@ -125,12 +133,15 @@ function addUnique(array, value) {
 function unwrapSedList(data) {
   if (!data) return [];
   if (Array.isArray(data)) return data;
-  if (Array.isArray(data.data)) return data.data;
-  if (Array.isArray(data.items)) return data.items;
-  if (Array.isArray(data.result)) return data.result;
-  if (Array.isArray(data.results)) return data.results;
-  if (data.data && typeof data.data === "object") return [data.data];
-  return [];
+  for (const key of ["data", "items", "result", "results", "avaliacoes", "avaliations", "value"]) {
+    const nested = data[key];
+    if (Array.isArray(nested)) return nested;
+    if (nested && typeof nested === "object") {
+      const rows = unwrapSedList(nested);
+      if (rows.length) return rows;
+    }
+  }
+  return typeof data === "object" ? [data] : [];
 }
 
 function toTitleCase(str) {
@@ -1228,18 +1239,21 @@ async function fetchAvaliacoes(cdUsuarioCurto, token, anoLetivo) {
 }
 
 function normalizeAvaliacoes(data, disciplinaPorId) {
-  const rows = unwrapSedList(data).filter((row) => row && typeof row === "object" && !row.dataExclusao);
+  const rows = unwrapSedList(data).filter((row) => row && typeof row === "object" && !row.dataExclusao && !row.DataExclusao);
   const list = rows.map((row, index) => {
-    const id = row?.disciplinaId ?? null;
+    const id = firstValue(row, ["disciplinaId", "DisciplinaId", "codigoDisciplina", "CodigoDisciplina"]);
+    const nota = firstValue(row, ["notaAtribuida", "NotaAtribuida", "nota", "Nota", "valorNota", "ValorNota", "notaAluno", "NotaAluno", "notaLancada", "NotaLancada", "notaFinal", "NotaFinal"]);
+    const bimestreRaw = firstValue(row, ["bimestre", "Bimestre", "bimestreNumero", "BimestreNumero", "periodo", "Periodo"]);
+    const bimestreMatch = String(bimestreRaw ?? "").match(/[1-4]/);
     return {
-      id: row?.avaliacaoNotaId ?? row?.avaliacaoId ?? `av-${index}`,
-      prova: String(row?.descricaoAvaliacao || "Avaliação").trim(),
-      data: row?.dataAvaliacao || null,
-      nota: numberValue(row?.notaAtribuida),
-      peso: numberValue(row?.peso),
-      bimestre: numberValue(row?.bimestre),
+      id: firstValue(row, ["avaliacaoNotaId", "AvaliacaoNotaId", "avaliacaoId", "AvaliacaoId"]) ?? `av-${index}`,
+      prova: String(firstValue(row, ["descricaoAvaliacao", "DescricaoAvaliacao", "nomeAvaliacao", "NomeAvaliacao", "descricao", "Descricao"]) || "Avaliação").trim(),
+      data: firstValue(row, ["dataAvaliacao", "DataAvaliacao", "data", "Data"]),
+      nota: numberValue(nota),
+      peso: numberValue(firstValue(row, ["peso", "Peso", "pesoAvaliacao", "PesoAvaliacao"])),
+      bimestre: bimestreMatch ? Number(bimestreMatch[0]) : null,
       disciplinaId: id,
-      disciplina: disciplinaPorId?.get?.(String(id)) || "",
+      disciplina: disciplinaPorId?.get?.(String(id)) || String(firstValue(row, ["nomeDisciplina", "NomeDisciplina", "disciplina", "Disciplina"]) || ""),
     };
   });
   list.sort((a, b) => String(b.data || "").localeCompare(String(a.data || "")));

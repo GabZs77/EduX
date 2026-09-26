@@ -4,7 +4,7 @@ import { sdfHeadLinks } from "@/components/SdfApp";
 
 const title = "EduX — Plataforma Estudantil";
 const description =
-  "Painel acadêmico do aluno: agenda, presença, boletim, tarefas e materiais em um só lugar.";
+  "Painel acadêmico do aluno: agenda, presença, boletim e materiais em um só lugar.";
 
 export const Route = createFileRoute("/")({
   head: () => ({

@@ -81,13 +81,13 @@ export const Route = createRootRouteWithContext<{ queryClient: QueryClient }>()(
       { title: "EduX — Plataforma Estudantil" },
       {
         name: "description",
-        content: "Agenda, presença, boletim, tarefas e materiais acadêmicos em um só lugar.",
+        content: "Agenda, presença, boletim e materiais acadêmicos em um só lugar.",
       },
       { name: "author", content: "EduX" },
       { property: "og:title", content: "EduX — Plataforma Estudantil" },
       {
         property: "og:description",
-        content: "Agenda, presença, boletim, tarefas e materiais acadêmicos em um só lugar.",
+        content: "Agenda, presença, boletim e materiais acadêmicos em um só lugar.",
       },
       { property: "og:type", content: "website" },
       { name: "twitter:card", content: "summary_large_image" },
