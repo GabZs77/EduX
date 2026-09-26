@@ -399,24 +399,46 @@ async function fetchEduspRoomTargets(token2) {
     });
     if (!resp.ok) return targets;
     const data = await readJson(resp);
-    const eduspRooms = Array.isArray(data?.rooms) ? data.rooms : [];
+    const eduspRooms = Array.isArray(data?.rooms) ? data.rooms : Array.isArray(data?.data) ? data.data : [];
     for (const room of eduspRooms) {
-      addUnique(targets, room?.name);
+      // A API pode identificar o mesmo alvo pelo nome, id ou código da sala.
+      for (const value of [
+        room?.name, room?.room_name, room?.roomName, room?.id, room?.room_id,
+        room?.codigo, room?.codigoTurma, room?.identificador, room?.target_value,
+      ]) addUnique(targets, value);
+
       const categories = Array.isArray(room?.group_categories) ? room.group_categories : [];
-      for (const cat of categories) addUnique(targets, cat?.id);
+      for (const cat of categories) {
+        for (const value of [cat?.id, cat?.name, cat?.code, cat?.target_value]) addUnique(targets, value);
+      }
     }
   } catch {}
   return targets;
 }
 
+function taskIdentity(raw) {
+  return String(raw?.id ?? raw?.task_id ?? raw?.taskId ?? `${raw?.title ?? raw?.name ?? ""}|${raw?.apply_moment ?? raw?.applyMoment ?? raw?.due_date ?? ""}`);
+}
+
+function isPendingTask(raw) {
+  const value = raw?.answer_status ?? raw?.answerStatus ?? raw?.status ?? null;
+  if (value === null || value === undefined || value === "") return true;
+  const status = String(value).toLowerCase();
+  return ["draft", "pending", "todo", "to_do", "not_started", "in_progress"].includes(status);
+}
+
 async function fetchTasks(token2, rooms, username) {
-  // Mesma consulta que a plataforma original faz na aba "A Fazer":
-  // apenas os alvos reais do aluno, somente status pendente e sem expiradas.
+  // A API de tarefas pode variar o identificador do publication_target e o
+  // estado de answer_status. Por isso fazemos uma consulta direcionada e,
+  // somente se ela não retornar tarefas, tentamos consultas autenticadas de
+  // fallback sem restringir o target. Isso evita mostrar 0 quando a conta
+  // possui tarefas mas a identificação da turma mudou.
   const baseTargets = [];
   for (const target of await fetchEduspRoomTargets(token2)) addUnique(baseTargets, target);
-  for (const room of rooms) {
-    if (!room.name) continue;
-    addUnique(baseTargets, room.name);
+  for (const room of rooms || []) {
+    for (const value of [room?.name, room?.id, room?.numeroClasse, room?.identificador]) {
+      addUnique(baseTargets, value);
+    }
   }
   if (username) {
     for (const target of [...baseTargets]) addUnique(baseTargets, `${target}:${username}-sp`);
@@ -427,31 +449,64 @@ async function fetchTasks(token2, rooms, username) {
   let lastData = null;
   const rawTasks = [];
 
-  try {
-    const result = await fetchTasksForTargets(token2, baseTargets, {
-  statuses: ["draft", "pending"],
-  filterExpired: true,
-  expiredOnly: false,
-});
-    lastResp = result.resp; lastData = result.data;
-    if (result.resp?.ok) rawTasks.push(...extractTasks(result.data));
-  } catch {}
+  async function runQuery(targets, statuses) {
+    try {
+      const result = await fetchTasksForTargets(token2, targets, {
+        statuses,
+        filterExpired: true,
+        expiredOnly: false,
+      });
+      lastResp = result.resp;
+      lastData = result.data;
+      if (!result.resp?.ok) return 0;
+      const found = extractTasks(result.data);
+      rawTasks.push(...found);
+      return found.length;
+    } catch {
+      return 0;
+    }
+  }
+
+  // Primeiro: consulta normal, aceitando os estados usados pela API.
+  let found = await runQuery(baseTargets, ["draft", "pending"]);
+
+  // Segundo: algumas versões da API retornam answer_status=null, então não
+  // limitar answer_statuses é necessário para localizar essas tarefas.
+  if (!found) found = await runQuery(baseTargets, false);
+
+  // Terceiro: se os targets da sala estiverem desatualizados, deixa a própria
+  // API autenticada determinar as tarefas do usuário.
+  if (!found) found = await runQuery([], false);
 
   const seen = new Set();
   const tasks = [];
   for (const raw of rawTasks) {
-    const id = String(raw?.id ?? raw?.task_id ?? raw?.taskId ?? `${raw?.title}|${raw?.apply_moment ?? ""}`);
+    const id = taskIdentity(raw);
     if (seen.has(id)) continue;
     seen.add(id);
-    const task = normalizeTask(raw, findRoomForTask(raw, rooms));
-    // Somente rascunhos: entregues e expiradas ficam de fora.
-    if (task.status !== "draft") continue;
-    const answered = raw?.answer_status ?? raw?.answerStatus ?? null;
-    if (answered && !["pending", "draft"].includes(String(answered).toLowerCase())) continue;
+
+    // A própria API já filtra expiradas; mantemos uma proteção local.
+    const dueRaw = raw?.apply_moment ?? raw?.applyMoment ?? raw?.due_date ?? raw?.dueDate ?? raw?.deadline;
+    if (dueRaw) {
+      const dueTime = Date.parse(dueRaw);
+      if (Number.isFinite(dueTime) && dueTime < Date.now()) continue;
+    }
+
+    if (!isPendingTask(raw)) continue;
+
+    const task = normalizeTask(raw, findRoomForTask(raw, rooms || []));
+    task.status = "draft";
     tasks.push(task);
   }
+
   tasks.sort((a, b) => (Date.parse(a.due || "") || 0) - (Date.parse(b.due || "") || 0));
-  return { ok: lastResp ? Boolean(lastResp.ok) : true, status: lastResp?.status ?? 200, tasks, targets: baseTargets, raw: lastData };
+  return {
+    ok: lastResp ? Boolean(lastResp.ok) : true,
+    status: lastResp?.status ?? 200,
+    tasks,
+    targets: baseTargets,
+    raw: lastData,
+  };
 }
 
 
