@@ -2226,7 +2226,20 @@ function leiaspSession(request) {
 }
 
 async function leiaspAuth(tokenSed, tokenEdusp = "") {
+  // A tela de login mantém o token SED como fallback quando o ip.tv está
+  // temporariamente indisponível. Antes de abrir o LeiaSP, tente renovar o
+  // token EdUSP para não reutilizar esse fallback antigo.
+  let refreshedEduspToken = "";
+  if (String(tokenSed || "").trim()) {
+    try {
+      const refreshed = await exchangeEduspToken(String(tokenSed).trim());
+      if (refreshed.resp?.ok && refreshed.data?.auth_token) {
+        refreshedEduspToken = String(refreshed.data.auth_token).trim();
+      }
+    } catch {}
+  }
   const candidates = [
+    ["edusp-renovado", refreshedEduspToken],
     ["sed", tokenSed],
     ["edusp", tokenEdusp],
   ].filter(([, value]) => String(value || "").trim());
