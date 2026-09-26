@@ -390,28 +390,33 @@
   function syncNav() {
     var link = document.querySelector("[data-sdf-notas]");
     if (link) link.classList.toggle("is-active", mode === "notas");
+    var bottomLink = document.querySelector("[data-sdf-notas-bottom]");
+    if (bottomLink) bottomLink.classList.toggle("active", mode === "notas");
     var nav = document.querySelector(".rail-nav");
-    if (!nav || mode !== "notas") return;
-    nav.querySelectorAll("a:not([data-sdf-notas])").forEach(function (a) { a.classList.remove("is-active"); });
+    if (nav && mode === "notas") {
+      nav.querySelectorAll("a:not([data-sdf-notas])").forEach(function (a) { a.classList.remove("is-active"); });
+    }
+    var bottomNav = document.querySelector(".bottom-nav");
+    if (bottomNav && mode === "notas") {
+      bottomNav.querySelectorAll("a:not([data-sdf-notas-bottom])").forEach(function (a) { a.classList.remove("active"); });
+    }
   }
 
-  function ensureNav() {
-    var nav = document.querySelector(".rail-nav");
-    if (!nav || nav.querySelector("[data-sdf-notas]")) return;
-    var ref = nav.querySelector('a[href="/boletim"]') || nav.querySelector("a");
-    if (!ref) return;
-    var link = ref.cloneNode(true);
-    link.setAttribute("data-sdf-notas", "1");
+  function configureNotesLink(link, bottom) {
+    link.setAttribute(bottom ? "data-sdf-notas-bottom" : "data-sdf-notas", "1");
     link.setAttribute("href", "#notas");
-    link.classList.remove("is-active");
+    link.classList.remove("active", "is-active");
     var count = link.querySelector(".nav-count");
     if (count) count.remove();
     var svg = link.querySelector("svg");
     if (svg) svg.outerHTML = ICON;
     var labels = link.querySelectorAll("span");
     if (labels.length) {
-      labels[0].textContent = "Notas";
-      for (var i = 1; i < labels.length; i++) labels[i].textContent = "Notas";
+      if (bottom) {
+        labels[labels.length - 1].textContent = "Notas";
+      } else {
+        for (var i = 0; i < labels.length; i++) labels[i].textContent = "Notas";
+      }
     } else {
       link.appendChild(document.createTextNode("Notas"));
     }
@@ -420,6 +425,25 @@
       ev.stopPropagation();
       render("notas");
     });
+    return link;
+  }
+
+  function ensureNav() {
+    var nav = document.querySelector(".rail-nav");
+    if (!nav || nav.querySelector("[data-sdf-notas]")) return;
+    var ref = nav.querySelector('a[href="/boletim"]') || nav.querySelector("a");
+    if (!ref) return;
+    var link = configureNotesLink(ref.cloneNode(true), false);
+    if (ref.nextSibling) nav.insertBefore(link, ref.nextSibling);
+    else nav.appendChild(link);
+  }
+
+  function ensureBottomNav() {
+    var nav = document.querySelector(".bottom-nav");
+    if (!nav || nav.querySelector("[data-sdf-notas-bottom]")) return;
+    var ref = nav.querySelector('a[href="/boletim"]') || nav.querySelector("a");
+    if (!ref) return;
+    var link = configureNotesLink(ref.cloneNode(true), true);
     if (ref.nextSibling) nav.insertBefore(link, ref.nextSibling);
     else nav.appendChild(link);
   }
@@ -427,6 +451,7 @@
   // ------------------------------------------------------------- rota do boletim
   function onRoute() {
     ensureNav();
+    ensureBottomNav();
     var isBoletim = location.pathname.replace(/\/+$/, "") === "/boletim";
     if (isBoletim) {
       if (mode !== "boletim") { openRow = null; render("boletim"); }
@@ -447,6 +472,7 @@
 
   var observer = new MutationObserver(function () {
     ensureNav();
+    ensureBottomNav();
     if (location.pathname.replace(/\/+$/, "") === "/boletim" && mode !== "boletim") {
       var main = appMain();
       if (main && !main.querySelector("#sdf-custom-view")) render("boletim");

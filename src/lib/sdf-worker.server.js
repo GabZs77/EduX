@@ -1267,7 +1267,7 @@ function normalizeAvaliacoes(data, disciplinaPorId) {
   const rows = unwrapSedList(data).filter((row) => row && typeof row === "object" && !row.dataExclusao && !row.DataExclusao);
   const list = rows.map((row, index) => {
     const id = firstValue(row, ["disciplinaId", "DisciplinaId", "codigoDisciplina", "CodigoDisciplina"]);
-    const nota = firstValue(row, ["notaAtribuida", "nota", "valorNota", "notaAluno", "notaLancada", "notaObtida", "notaAvaliacao", "notaFinal", "mediaFinal", "score", "grade"]) ?? findNoteValue(row);
+    const nota = firstValue(row, ["notaAtribuida", "nota", "valorNota", "notaAluno", "notaLancada", "notaObtida", "notaAvaliacao", "notaFinal", "notaAtribuidaMediaFinal", "notaMediaFinal", "mediaFinal", "score", "grade"]) ?? findNoteValue(row);
     const bimestreRaw = firstValue(row, ["bimestre", "Bimestre", "bimestreNumero", "BimestreNumero", "periodo", "Periodo"]);
     const bimestreMatch = String(bimestreRaw ?? "").match(/[1-4]/);
     return {
