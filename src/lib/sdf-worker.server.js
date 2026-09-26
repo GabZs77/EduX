@@ -2232,55 +2232,60 @@ async function leiaspAuth(tokenSed, tokenEdusp = "") {
   let lastStatus = 0;
   let lastDetail = "";
   for (const candidate of candidates) {
-    const headers = {
-      ...UPSTREAM_HEADERS,
-      Accept: "application/json, text/plain, */*",
-      "X-Product-Name": "SalaDoFuturo",
-      "Ocp-Apim-Subscription-Key": LEIASP_APIM_KEY,
-      Authorization: `Bearer ${candidate}`,
-    };
-    const tokenResp = await fetch(LEIASP_INTEGRATION_URL, {
-      method: "GET",
-      headers,
-      redirect: "manual",
-      cache: "no-store",
-    });
-    const tokenData = await readJson(tokenResp);
-    const jwt = String(tokenData?.data || "").trim();
-    lastStatus = tokenResp.status;
-    lastDetail = tokenData?.message || tokenData?.error || "";
-    if (!tokenResp.ok || !jwt) continue;
-
-    const oauthResp = await fetch(`${ELEFANTE_OAUTH_BASE}?token=${encodeURIComponent(jwt)}`, {
-      headers: { ...UPSTREAM_HEADERS, Accept: "application/json" },
-      redirect: "manual",
-    });
-    let accessToken = "";
-    const location = oauthResp.headers.get("location") || "";
-    const encoded = location ? new URL(location).searchParams.get("t") : "";
-    if (encoded) {
-      try {
-        const bytes = Uint8Array.from(atob(encoded), (c) => c.charCodeAt(0));
-        const decoded = JSON.parse(new TextDecoder().decode(bytes));
-        accessToken = String(decoded?.access_token || "").trim();
-      } catch {}
+    for (const authorization of [`Bearer ${candidate}`, candidate]) {
+      const headers = {
+        ...UPSTREAM_HEADERS,
+        Accept: "application/json, text/plain, */*",
+        "Accept-Language": "pt-BR,pt;q=0.9,en-US;q=0.8,en;q=0.7",
+        "X-Product-Name": "SalaDoFuturo",
+        "Ocp-Apim-Subscription-Key": LEIASP_APIM_KEY,
+        "sec-ch-ua": '"Chromium";v="151", "Not_A Brand";v="99"',
+        "sec-ch-ua-mobile": "?0",
+        "sec-ch-ua-platform": '"Linux"',
+        Authorization: authorization,
+      };
+      const tokenResp = await fetch(LEIASP_INTEGRATION_URL, {
+        method: "GET",
+        headers,
+        redirect: "manual",
+        cache: "no-store",
+      });
+      const tokenData = await readJson(tokenResp);
+      const jwt = String(tokenData?.data || "").trim();
+      lastStatus = tokenResp.status;
+      lastDetail = tokenData?.message || tokenData?.error || "";
+      if (!tokenResp.ok || !jwt) continue;
+      const oauthResp = await fetch(`${ELEFANTE_OAUTH_BASE}?token=${encodeURIComponent(jwt)}`, {
+        headers: { ...UPSTREAM_HEADERS, Accept: "application/json" },
+        redirect: "manual",
+      });
+      let accessToken = "";
+      const location = oauthResp.headers.get("location") || "";
+      const encoded = location ? new URL(location).searchParams.get("t") : "";
+      if (encoded) {
+        try {
+          const bytes = Uint8Array.from(atob(encoded), (c) => c.charCodeAt(0));
+          const decoded = JSON.parse(new TextDecoder().decode(bytes));
+          accessToken = String(decoded?.access_token || "").trim();
+        } catch {}
+      }
+      if (!accessToken && oauthResp.ok) {
+        const oauthData = await readJson(oauthResp);
+        accessToken = String(oauthData?.access_token || oauthData?.token || "").trim();
+      }
+      if (!accessToken) {
+        lastStatus = oauthResp.status;
+        lastDetail = "OAuth não retornou access_token";
+        continue;
+      }
+      return {
+        Authorization: `Bearer ${accessToken}`,
+        ...UPSTREAM_HEADERS,
+        origin: "https://reader.elefanteletrado.com.br",
+        referer: "https://reader.elefanteletrado.com.br/",
+        "Content-Type": "application/json; charset=UTF-8",
+      };
     }
-    if (!accessToken && oauthResp.ok) {
-      const oauthData = await readJson(oauthResp);
-      accessToken = String(oauthData?.access_token || oauthData?.token || "").trim();
-    }
-    if (!accessToken) {
-      lastStatus = oauthResp.status;
-      lastDetail = "OAuth não retornou access_token";
-      continue;
-    }
-    return {
-      Authorization: `Bearer ${accessToken}`,
-      ...UPSTREAM_HEADERS,
-      origin: "https://reader.elefanteletrado.com.br",
-      referer: "https://reader.elefanteletrado.com.br/",
-      "Content-Type": "application/json; charset=UTF-8",
-    };
   }
   throw new Error(
     `Não foi possível abrir o LeiaSP (HTTP ${lastStatus || 401})${lastDetail ? `: ${lastDetail}` : ". Verifique a sessão do EduX."}`,
