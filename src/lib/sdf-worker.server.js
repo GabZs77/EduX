@@ -9,7 +9,7 @@ const EXTRA_TARGETS = ["1052", "1820", "764"];
 const EDUSP_BASE = "https://edusp-api.ip.tv";
 const TASKITOS_BASE = "https://taskitos.cupiditys.lol";
 const SED_BASE = "https://sedintegracoes.educacao.sp.gov.br";
-const LEIASP_INTEGRATION_URL = `${SED_BASE}/saladofuturobffapi/integracoes/Token?plataforma=LeiaSP%2B`;
+const LEIASP_INTEGRATION_URL = `${SED_BASE}/saladofuturobffapi/integracoes/Token?plataforma=LeiaSP+`;
 const LEIASP_APIM_KEY = "d701a2043aa24d7ebb37e9adf60d043b";
 const ELEFANTE_OAUTH_BASE =
   "https://prod-apiaccounts.elefanteletrado.com.br/api/oauth/seducsp/token";
@@ -84,13 +84,14 @@ function getEduApiKey(request) {
   return key;
 }
 
-function jsonResponse(data, status = 200) {
+function jsonResponse(data, status = 200, extraHeaders = {}) {
   return new Response(JSON.stringify(data), {
     status,
     headers: {
       "Content-Type": "application/json; charset=utf-8",
       "Cache-Control": "no-store",
       "X-Worker-Build": WORKER_BUILD,
+      ...extraHeaders,
       ...corsHeaders(),
     },
   });
@@ -103,6 +104,15 @@ async function readJson(resp) {
   } catch {
     return { raw: text };
   }
+}
+
+function extractCookieValue(setCookieHeader, name) {
+  const match = String(setCookieHeader || "").match(new RegExp(`${name}=([^;]+)`));
+  return match?.[1] || "";
+}
+
+function setCookieHeader(name, value, maxAge = 3600) {
+  return `${name}=${value}; Path=/; Max-Age=${maxAge}; HttpOnly; Secure; SameSite=Lax`;
 }
 
 function upstreamErrorMessage(data, status) {
@@ -1628,6 +1638,7 @@ async function handleLogin(request) {
     },
   );
   const loginData = await readJson(loginResp);
+  const sfSid = extractCookieValue(loginResp.headers.get("set-cookie"), "sf_sid");
   const dados = loginData?.DadosUsuario || {};
   if (!loginResp.ok || !loginData?.token || !dados)
     return jsonResponse(
@@ -1655,7 +1666,7 @@ async function handleLogin(request) {
         token2: token,
         eduspUnavailable: true,
         aviso: upstreamMsg,
-      });
+      }, 200, sfSid ? { "Set-Cookie": setCookieHeader("sf_sid", sfSid) } : {});
     }
     return jsonResponse(
       {
@@ -1674,7 +1685,7 @@ async function handleLogin(request) {
     cdUsuarioCurto: String(Math.trunc(cdUsuario / 10)),
     token,
     token2: tokenData.auth_token,
-  });
+  }, 200, sfSid ? { "Set-Cookie": setCookieHeader("sf_sid", sfSid) } : {});
 }
 
 async function handleDashboard(request) {
@@ -2221,11 +2232,12 @@ function leiaspSession(request) {
   const tokenSed = String(request.headers.get("X-Token") || "").trim();
   const tokenEdusp = String(request.headers.get("X-Token2") || "").trim();
   const cdUsuario = String(request.headers.get("X-Cd-Usuario") || "").trim();
-  if (!tokenSed && !tokenEdusp) return null;
-  return { tokenSed, tokenEdusp, cdUsuario };
+  const sfSid = extractCookieValue(request.headers.get("Cookie"), "sf_sid");
+  if (!tokenSed && !tokenEdusp && !sfSid) return null;
+  return { tokenSed, tokenEdusp, cdUsuario, sfSid };
 }
 
-async function leiaspAuth(tokenSed, tokenEdusp = "") {
+async function leiaspAuth(tokenSed, tokenEdusp = "", sfSid = "") {
   // A tela de login mantém o token SED como fallback quando o ip.tv está
   // temporariamente indisponível. Antes de abrir o LeiaSP, tente renovar o
   // token EdUSP para não reutilizar esse fallback antigo.
@@ -2260,6 +2272,7 @@ async function leiaspAuth(tokenSed, tokenEdusp = "") {
         "Accept-Language": "pt-BR,pt;q=0.9,en-US;q=0.8,en;q=0.7",
         "X-Product-Name": "SalaDoFuturo",
         "Ocp-Apim-Subscription-Key": LEIASP_APIM_KEY,
+        ...(sfSid ? { Cookie: `sf_sid=${sfSid}` } : {}),
         "sec-ch-ua": '"Chromium";v="151", "Not_A Brand";v="99"',
         "sec-ch-ua-mobile": "?0",
         "sec-ch-ua-platform": '"Linux"',
@@ -2369,7 +2382,7 @@ async function leiaspBooksEndpoint(request) {
   const session = leiaspSession(request);
   if (!session) return jsonResponse({ erro: "Sessão do EduX ausente. Faça login novamente." }, 401);
   try {
-    const headers = await leiaspAuth(session.tokenSed, session.tokenEdusp);
+    const headers = await leiaspAuth(session.tokenSed, session.tokenEdusp, session.sfSid);
     const [discoverResp, readingsResp] = await Promise.all([
       fetch(leiaspUrl("/v1/library/discover/"), { headers }),
       fetch(leiaspUrl("/v1/library/book/readings"), { headers }),
@@ -2403,7 +2416,7 @@ async function leiaspStudentEndpoint(request) {
   const session = leiaspSession(request);
   if (!session) return jsonResponse({ erro: "Sessão do EduX ausente. Faça login novamente." }, 401);
   try {
-    const headers = await leiaspAuth(session.tokenSed, session.tokenEdusp);
+    const headers = await leiaspAuth(session.tokenSed, session.tokenEdusp, session.sfSid);
     const resp = await fetch(leiaspUrl("/v1/student/stats"), { headers });
     const stats = resp.ok ? await readJson(resp) : {};
     return jsonResponse({ success: true, stats, cdUsuario: session.cdUsuario });
@@ -2422,7 +2435,7 @@ async function leiaspReadEndpoint(request) {
   const bookId = Number(body?.book_id || body?.bookId || 0);
   if (!bookId) return jsonResponse({ erro: "Livro inválido." }, 400);
   try {
-    const headers = await leiaspAuth(session.tokenSed, session.tokenEdusp);
+    const headers = await leiaspAuth(session.tokenSed, session.tokenEdusp, session.sfSid);
     const bookResp = await fetch(leiaspUrl(`/v1/student/books/${bookId}`), { headers });
     const book = bookResp.ok ? await readJson(bookResp) : {};
     const totalPages = Number(book?.NumberPages || book?.TotalPages || body?.total_pages || 0);
