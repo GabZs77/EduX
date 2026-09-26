@@ -131,6 +131,20 @@ function firstValue(row, keys) {
   }
   return null;
 }
+function validNoteValue(value) {
+  const number = numberValue(value);
+  return number !== null && number >= 0 && number <= 10 ? number : null;
+}
+function firstNoteValue(row, keys) {
+  if (!row || typeof row !== "object") return null;
+  const wanted = new Set(keys.map((key) => String(key).toLowerCase().replace(/[^a-z0-9]/g, "")));
+  for (const [key, value] of Object.entries(row)) {
+    if (!wanted.has(key.toLowerCase().replace(/[^a-z0-9]/g, ""))) continue;
+    const number = validNoteValue(value);
+    if (number !== null) return number;
+  }
+  return null;
+}
 function findNoteValue(value, seen = new Set()) {
   if (!value || typeof value !== "object" || seen.has(value)) return null;
   seen.add(value);
@@ -138,7 +152,7 @@ function findNoteValue(value, seen = new Set()) {
   for (const [key, nested] of Object.entries(value)) {
     const normalized = key.toLowerCase().replace(/[^a-z0-9]/g, "");
     if (preferred.includes(normalized) || /nota|score|grade/.test(normalized)) {
-      const number = numberValue(nested);
+      const number = validNoteValue(nested);
       if (number !== null) return number;
     }
   }
@@ -1267,7 +1281,7 @@ function normalizeAvaliacoes(data, disciplinaPorId) {
   const rows = unwrapSedList(data).filter((row) => row && typeof row === "object" && !row.dataExclusao && !row.DataExclusao);
   const list = rows.map((row, index) => {
     const id = firstValue(row, ["disciplinaId", "DisciplinaId", "codigoDisciplina", "CodigoDisciplina"]);
-    const nota = firstValue(row, ["notaAtribuida", "nota", "valorNota", "notaAluno", "notaLancada", "notaObtida", "notaAvaliacao", "notaFinal", "notaAtribuidaMediaFinal", "notaMediaFinal", "mediaFinal", "score", "grade"]) ?? findNoteValue(row);
+    const nota = firstNoteValue(row, ["notaAtribuida", "nota", "valorNota", "notaAluno", "notaLancada", "notaObtida", "notaAvaliacao", "notaFinal", "notaAtribuidaMediaFinal", "notaMediaFinal", "mediaFinal", "score", "grade"]) ?? findNoteValue(row);
     const bimestreRaw = firstValue(row, ["bimestre", "Bimestre", "bimestreNumero", "BimestreNumero", "periodo", "Periodo"]);
     const bimestreMatch = String(bimestreRaw ?? "").match(/[1-4]/);
     return {
