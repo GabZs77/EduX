@@ -6,3 +6,5 @@
 - [x] Validar a tela em celular e computador.
 - [x] Testar acesso direto, modal de contas e endpoint de saúde.
 - [x] Trocar o salvamento em rascunho pela conclusão direta da atividade.
+- [x] Alinhar a listagem de tarefas pendentes ao filtro “A Fazer” da plataforma oficial.
+- [x] Renovar automaticamente a sessão de tarefas antes de carregar o painel.

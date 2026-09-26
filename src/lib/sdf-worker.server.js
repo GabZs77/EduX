@@ -199,13 +199,13 @@ function taskRoomTarget(task, fallback = "") {
 }
 function normalizeTask(task, roomName = "") {
   const due = task?.apply_moment ?? task?.applyMoment ?? task?.due_date ?? task?.dueDate ?? task?.deadline ?? null;
-  // A API oficial consulta answer_statuses=draft e devolve answer_status=null
-  // quando o aluno ainda não iniciou a atividade. Esse é o estado de rascunho,
-  // não "pending"; manter a distinção evita que o frontend zere o contador.
-  const rawStatus = String(task?.answer_status ?? task?.status ?? "draft").toLowerCase();
-  let status = rawStatus || "draft";
+  const rawStatus = String(task?.answer_status ?? task?.status ?? "pending").toLowerCase();
+  // A API oficial usa answer_status=pending mesmo quando apply_moment já passou.
+  // A data não pode transformar uma tarefa não respondida em expired, senão
+  // tarefas pendentes legítimas desaparecem do cartão "Tarefas pendentes".
+  let status = rawStatus || "pending";
   const answered = ["submitted", "completed", "done", "finished"].includes(status);
-  if (!answered && !["expired", "overdue"].includes(status)) status = "draft";
+  if (!answered && !["expired", "overdue"].includes(status)) status = "pending";
   if (["overdue"].includes(status)) status = "expired";
   return {
     id: task?.id ?? task?.task_id ?? task?.taskId ?? null,
@@ -399,46 +399,25 @@ async function fetchEduspRoomTargets(token2) {
     });
     if (!resp.ok) return targets;
     const data = await readJson(resp);
-    const eduspRooms = Array.isArray(data?.rooms) ? data.rooms : Array.isArray(data?.data) ? data.data : [];
+    const eduspRooms = Array.isArray(data?.rooms) ? data.rooms : [];
     for (const room of eduspRooms) {
-      // A API pode identificar o mesmo alvo pelo nome, id ou código da sala.
-      for (const value of [
-        room?.name, room?.room_name, room?.roomName, room?.id, room?.room_id,
-        room?.codigo, room?.codigoTurma, room?.identificador, room?.target_value,
-      ]) addUnique(targets, value);
-
+      addUnique(targets, room?.name);
       const categories = Array.isArray(room?.group_categories) ? room.group_categories : [];
-      for (const cat of categories) {
-        for (const value of [cat?.id, cat?.name, cat?.code, cat?.target_value]) addUnique(targets, value);
-      }
+      for (const cat of categories) addUnique(targets, cat?.id);
     }
   } catch {}
   return targets;
 }
 
-function taskIdentity(raw) {
-  return String(raw?.id ?? raw?.task_id ?? raw?.taskId ?? `${raw?.title ?? raw?.name ?? ""}|${raw?.apply_moment ?? raw?.applyMoment ?? raw?.due_date ?? ""}`);
-}
-
-function isPendingTask(raw) {
-  const value = raw?.answer_status ?? raw?.answerStatus ?? raw?.status ?? null;
-  if (value === null || value === undefined || value === "") return true;
-  const status = String(value).toLowerCase();
-  return ["draft", "pending", "todo", "to_do", "not_started", "in_progress"].includes(status);
-}
-
 async function fetchTasks(token2, rooms, username) {
-  // A API de tarefas pode variar o identificador do publication_target e o
-  // estado de answer_status. Por isso fazemos uma consulta direcionada e,
-  // somente se ela não retornar tarefas, tentamos consultas autenticadas de
-  // fallback sem restringir o target. Isso evita mostrar 0 quando a conta
-  // possui tarefas mas a identificação da turma mudou.
+  // Mesma consulta que a plataforma original faz na aba "A Fazer":
+  // apenas os alvos reais do aluno, filtro draft e sem expiradas. A API inclui
+  // nesse filtro as tarefas ainda não iniciadas, cujo answer_status vem nulo.
   const baseTargets = [];
   for (const target of await fetchEduspRoomTargets(token2)) addUnique(baseTargets, target);
-  for (const room of rooms || []) {
-    for (const value of [room?.name, room?.id, room?.numeroClasse, room?.identificador]) {
-      addUnique(baseTargets, value);
-    }
+  for (const room of rooms) {
+    if (!room.name) continue;
+    addUnique(baseTargets, room.name);
   }
   if (username) {
     for (const target of [...baseTargets]) addUnique(baseTargets, `${target}:${username}-sp`);
@@ -449,64 +428,31 @@ async function fetchTasks(token2, rooms, username) {
   let lastData = null;
   const rawTasks = [];
 
-  async function runQuery(targets, statuses) {
-    try {
-      const result = await fetchTasksForTargets(token2, targets, {
-        statuses,
-        filterExpired: true,
-        expiredOnly: false,
-      });
-      lastResp = result.resp;
-      lastData = result.data;
-      if (!result.resp?.ok) return 0;
-      const found = extractTasks(result.data);
-      rawTasks.push(...found);
-      return found.length;
-    } catch {
-      return 0;
-    }
-  }
-
-  // Primeiro: consulta normal, aceitando os estados usados pela API.
-  let found = await runQuery(baseTargets, ["draft", "pending"]);
-
-  // Segundo: algumas versões da API retornam answer_status=null, então não
-  // limitar answer_statuses é necessário para localizar essas tarefas.
-  if (!found) found = await runQuery(baseTargets, false);
-
-  // Terceiro: se os targets da sala estiverem desatualizados, deixa a própria
-  // API autenticada determinar as tarefas do usuário.
-  if (!found) found = await runQuery([], false);
+  try {
+    const result = await fetchTasksForTargets(token2, baseTargets, {
+      statuses: ["draft"],
+      filterExpired: true,
+      expiredOnly: false,
+    });
+    lastResp = result.resp; lastData = result.data;
+    if (result.resp?.ok) rawTasks.push(...extractTasks(result.data));
+  } catch {}
 
   const seen = new Set();
   const tasks = [];
   for (const raw of rawTasks) {
-    const id = taskIdentity(raw);
+    const id = String(raw?.id ?? raw?.task_id ?? raw?.taskId ?? `${raw?.title}|${raw?.apply_moment ?? ""}`);
     if (seen.has(id)) continue;
     seen.add(id);
-
-    // A própria API já filtra expiradas; mantemos uma proteção local.
-    const dueRaw = raw?.apply_moment ?? raw?.applyMoment ?? raw?.due_date ?? raw?.dueDate ?? raw?.deadline;
-    if (dueRaw) {
-      const dueTime = Date.parse(dueRaw);
-      if (Number.isFinite(dueTime) && dueTime < Date.now()) continue;
-    }
-
-    if (!isPendingTask(raw)) continue;
-
-    const task = normalizeTask(raw, findRoomForTask(raw, rooms || []));
-    task.status = "draft";
+    const task = normalizeTask(raw, findRoomForTask(raw, rooms));
+    // Somente tarefas pendentes: entregues e expiradas ficam de fora.
+    if (task.status !== "pending") continue;
+    const answered = raw?.answer_status ?? raw?.answerStatus ?? null;
+    if (answered && !["pending", "draft"].includes(String(answered).toLowerCase())) continue;
     tasks.push(task);
   }
-
   tasks.sort((a, b) => (Date.parse(a.due || "") || 0) - (Date.parse(b.due || "") || 0));
-  return {
-    ok: lastResp ? Boolean(lastResp.ok) : true,
-    status: lastResp?.status ?? 200,
-    tasks,
-    targets: baseTargets,
-    raw: lastData,
-  };
+  return { ok: lastResp ? Boolean(lastResp.ok) : true, status: lastResp?.status ?? 200, tasks, targets: baseTargets, raw: lastData };
 }
 
 
@@ -1175,15 +1121,22 @@ async function handleDashboard(request) {
     token ? fetchAgenda(token, cdUsuario) : Promise.resolve({ ok: false, events: [] }),
   ]);
   const rooms = roomsResult.rooms;
-  // A plataforma oficial usa o token de sessão SED diretamente no cliente
-  // de tarefas. O fallback de login mantém esse mesmo token em token2 quando
-  // a troca opcional do backend é bloqueada pelo Cloudflare.
-  const taskResult = await fetchTasks(token2, rooms, username);
+  // Sessões restauradas do navegador podem conservar um token EduSP antigo.
+  // Renove-o com o token SED antes de consultar salas e tarefas; se a troca
+  // estiver temporariamente bloqueada, preserve o token recebido como fallback.
+  let currentTaskToken = token2;
+  if (token) {
+    const refreshed = await exchangeEduspToken(token);
+    if (refreshed.resp?.ok && refreshed.data?.auth_token) {
+      currentTaskToken = String(refreshed.data.auth_token).trim();
+    }
+  }
+  const taskResult = await fetchTasks(currentTaskToken, rooms, username);
   const aluno = alunoResult.data;
   const alunoData = aluno?.data && typeof aluno.data === "object" ? aluno.data : aluno;
   return jsonResponse({
     aluno: alunoData || {}, turmas: rooms, tarefas: taskResult.tasks,
-    pendencias: taskResult.tasks.filter((t) => t.status === "draft").length,
+    pendencias: taskResult.tasks.filter((t) => t.status === "pending").length,
 
     faltas: faltasResult.total, mensagensNaoLidas: notificationsResult.unread, mensagens: notificationsResult.total,
     targets: taskResult.targets, tarefasApiOk: taskResult.ok, tarefasApiStatus: taskResult.status,

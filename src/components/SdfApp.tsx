@@ -12,28 +12,17 @@ export const sdfHeadLinks = [
 
 export function SdfApp() {
   useEffect(() => {
-    // O bundle legado declara variaveis no escopo global (script classico).
-    // Executa-lo duas vezes causa "Identifier 'x' has already been declared"
-    // e deixa a tela em branco — por isso ele e montado uma unica vez.
+    // O bundle legado declara variáveis no escopo global (script clássico).
+    // Executá-lo duas vezes causa "Identifier 'x' has already been declared"
+    // e deixa a tela em branco — por isso ele é montado uma única vez.
     const w = window as unknown as { __sdfAppMounted?: boolean };
     if (w.__sdfAppMounted) return;
     if (document.getElementById("sdf-app-bundle")) return;
     w.__sdfAppMounted = true;
 
-    // A ponte precisa rodar antes do bundle principal (corrige o token de
-    // tarefas quando o servidor e bloqueado). async=false preserva a ordem.
-    if (!document.getElementById("sdf-edusp-bridge")) {
-      const bridge = document.createElement("script");
-      bridge.id = "sdf-edusp-bridge";
-      bridge.src = "/sdf-edusp-bridge.js";
-      bridge.async = false;
-      document.body.appendChild(bridge);
-    }
-
     const script = document.createElement("script");
     script.id = "sdf-app-bundle";
     script.src = "/sdf-app.js";
-    script.async = false;
     document.body.appendChild(script);
 
     for (const id of [
@@ -41,7 +30,6 @@ export function SdfApp() {
       "sdf-saved-accounts",
       "sdf-task-helper",
       "sdf-notas",
-      "sdf-empty-tasks-note",
     ]) {
       if (document.getElementById(id)) continue;
       const extras = document.createElement("script");
