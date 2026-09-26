@@ -428,7 +428,7 @@ function extractStudentRows(data, seen = new Set()) {
   if (!data || typeof data !== "object" || seen.has(data)) return [];
   if (Array.isArray(data)) return data.flatMap((item) => extractStudentRows(item, seen));
   seen.add(data);
-  for (const key of ["alunos", "alunosTurma", "estudantes", "students", "data", "items", "result", "results", "value"]) {
+  for (const key of ["alunos", "alunosTurma", "estudantes", "students", "turmas", "classes", "aluno", "student", "data", "items", "result", "results", "value"]) {
     if (data[key] && typeof data[key] === "object") {
       const rows = extractStudentRows(data[key], seen);
       if (rows.length) return rows;
@@ -466,8 +466,17 @@ async function handleTurma(request) {
   const { token, cdUsuario } = sedSessionFrom(request);
   if (!cdUsuario) return jsonResponse({ ok: false, erro: "Sessão inválida", data: [] }, 400);
   const turmaResult = await fetchTurmas(cdUsuario, token);
+  const alunosDoPayload = extractStudentRows(turmaResult.data);
+  const alunosEmbutidos = alunosDoPayload.map((row, index) => {
+    const turmaId = firstValue(row, ["codigoTurma", "CodigoTurma", "turmaId", "TurmaId"]);
+    const room = turmaResult.rooms.find((item) => String(item.id) === String(turmaId)) || {
+      id: turmaId || "turma",
+      name: String(firstValue(row, ["descricaoTurma", "DescricaoTurma", "nomeTurma", "NomeTurma"]) || "Turma").trim(),
+    };
+    return normalizeStudent(row, index, room);
+  }).filter(Boolean);
   const alunosPorTurma = await Promise.all(turmaResult.rooms.map((room) => fetchAlunosDaTurma(room, token)));
-  const alunos = alunosPorTurma.flat();
+  const alunos = alunosEmbutidos.concat(alunosPorTurma.flat());
   const unique = new Map();
   for (const aluno of alunos) {
     const key = `${aluno.turmaId || ""}:${aluno.ra || aluno.nome}`;
