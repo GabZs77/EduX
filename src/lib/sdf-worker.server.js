@@ -2227,12 +2227,20 @@ function leiaspSession(request) {
 
 async function leiaspAuth(tokenSed, tokenEdusp = "") {
   const candidates = [
-    ...new Set([tokenSed, tokenEdusp].map((value) => String(value || "").trim()).filter(Boolean)),
-  ];
+    ["sed", tokenSed],
+    ["edusp", tokenEdusp],
+  ].filter(([, value]) => String(value || "").trim());
   let lastStatus = 0;
   let lastDetail = "";
-  for (const candidate of candidates) {
-    for (const authorization of [`Bearer ${candidate}`, candidate]) {
+  let lastAttempt = "";
+  for (const [source, rawValue] of candidates) {
+    const candidate = String(rawValue).trim();
+    const authorizationVariants = [
+      ["bearer", { Authorization: `Bearer ${candidate}` }],
+      ["raw", { Authorization: candidate }],
+      ["x-token", { "X-Token": candidate }],
+    ];
+    for (const [authorizationType, authorizationHeader] of authorizationVariants) {
       const headers = {
         ...UPSTREAM_HEADERS,
         Accept: "application/json, text/plain, */*",
@@ -2242,8 +2250,9 @@ async function leiaspAuth(tokenSed, tokenEdusp = "") {
         "sec-ch-ua": '"Chromium";v="151", "Not_A Brand";v="99"',
         "sec-ch-ua-mobile": "?0",
         "sec-ch-ua-platform": '"Linux"',
-        Authorization: authorization,
+        ...authorizationHeader,
       };
+      lastAttempt = `${source}/${authorizationType}`;
       const tokenResp = await fetch(LEIASP_INTEGRATION_URL, {
         method: "GET",
         headers,
@@ -2253,7 +2262,8 @@ async function leiaspAuth(tokenSed, tokenEdusp = "") {
       const tokenData = await readJson(tokenResp);
       const jwt = String(tokenData?.data || "").trim();
       lastStatus = tokenResp.status;
-      lastDetail = tokenData?.message || tokenData?.error || "";
+      lastDetail =
+        tokenData?.message || tokenData?.error || tokenData?.erro || tokenData?.raw || "";
       if (!tokenResp.ok || !jwt) continue;
       const oauthResp = await fetch(`${ELEFANTE_OAUTH_BASE}?token=${encodeURIComponent(jwt)}`, {
         headers: { ...UPSTREAM_HEADERS, Accept: "application/json" },
@@ -2288,7 +2298,11 @@ async function leiaspAuth(tokenSed, tokenEdusp = "") {
     }
   }
   throw new Error(
-    `Não foi possível abrir o LeiaSP (HTTP ${lastStatus || 401})${lastDetail ? `: ${lastDetail}` : ". Verifique a sessão do EduX."}`,
+    `Não foi possível abrir o LeiaSP (HTTP ${lastStatus || 401})${
+      lastDetail
+        ? `: ${String(lastDetail).slice(0, 240)}`
+        : `. Última tentativa: ${lastAttempt || "nenhuma"}. Verifique a sessão do EduX.`
+    }`,
   );
 }
 
