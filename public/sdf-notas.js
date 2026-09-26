@@ -37,18 +37,24 @@
   function load(force) {
     if (cache && !force) return Promise.resolve(cache);
     if (loading && !force) return loading;
-    loading = fetch(API + "/notas", { headers: headers() })
-      .then(function (r) { return r.json(); })
-      .then(function (json) {
+    loading = Promise.all([
+      fetch(API + "/notas", { headers: headers() }).then(function (r) { return r.json(); }),
+      fetch(API + "/turma", { headers: headers() }).then(function (r) { return r.json(); }),
+    ])
+      .then(function (responses) {
+        var json = responses[0] || {};
+        var turma = responses[1] || {};
         cache = {
-          avaliacoes: Array.isArray(json && json.data) ? json.data : [],
-          boletim: Array.isArray(json && json.boletim) ? json.boletim : [],
-          ok: !!(json && json.ok),
+          avaliacoes: Array.isArray(json.data) ? json.data : [],
+          boletim: Array.isArray(json.boletim) ? json.boletim : [],
+          turma: Array.isArray(turma.data) ? turma.data : [],
+          turmaOk: !!turma.ok,
+          ok: !!json.ok,
         };
         return cache;
       })
       .catch(function () {
-        cache = { avaliacoes: [], boletim: [], ok: false, erro: true };
+        cache = { avaliacoes: [], boletim: [], turma: [], ok: false, turmaOk: false, erro: true };
         return cache;
       })
       .finally(function () { loading = null; });
@@ -134,6 +140,7 @@
     + ".sdf-nota-item{display:flex;align-items:center;gap:14px;padding:14px 16px;border-top:1px solid var(--border-soft)}"
     + ".sdf-nota-item:first-child{border-top:0}"
     + ".sdf-nota-item .sdf-nota-copy{flex:1;min-width:0}"
+    + ".sdf-turma-list{overflow:hidden}.sdf-turma-item{display:flex;align-items:center;gap:12px;padding:14px 16px;border-top:1px solid var(--border-soft)}.sdf-turma-item:first-child{border-top:0}.sdf-turma-avatar{width:36px;height:36px;border-radius:50%;display:grid;place-items:center;background:rgba(139,92,246,.24);color:#c4b5fd;font-weight:800}.sdf-turma-copy{min-width:0}.sdf-turma-copy strong{display:block;color:var(--foreground);font-size:.96rem}.sdf-turma-copy span{display:block;color:var(--muted);font-size:.82rem;margin-top:3px}"
     + ".sdf-nota-item strong{display:block;font-size:.96rem;color:var(--foreground)}"
     + ".sdf-nota-item span{display:block;font-size:.82rem;color:var(--muted);margin-top:2px}"
     + ".sdf-kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:12px}"
@@ -206,7 +213,7 @@
       if (!mode) return;
       var target = root();
       if (!target) return;
-      target.innerHTML = mode === "notas" ? viewNotas(data) : viewBoletim(data);
+      target.innerHTML = mode === "notas" ? viewNotas(data) : mode === "turma" ? viewTurma(data) : viewBoletim(data);
       wire(target, data);
     });
     syncNav();
@@ -330,6 +337,20 @@
       + "</div></div>";
   }
 
+  // -------------------------------------------------------------------- turma
+  function viewTurma(data) {
+    var alunos = Array.isArray(data.turma) ? data.turma.slice().sort(function (a, b) {
+      return String(a.nome || "").localeCompare(String(b.nome || ""), "pt-BR");
+    }) : [];
+    var rows = alunos.map(function (aluno) {
+      // O Worker já remove qualquer campo sensível; aqui também usamos somente nome e RA.
+      return '<div class="sdf-turma-item"><div class="sdf-turma-avatar">' + esc(String(aluno.nome || "Aluno").slice(0, 1).toUpperCase()) + '</div><div class="sdf-turma-copy"><strong>' + esc(aluno.nome || "Aluno") + '</strong><span>RA: ' + esc(aluno.ra || "não informado") + '</span></div></div>';
+    }).join("");
+    return '<div class="sdf-view sdf-turma-view"><div class="sdf-view-head"><h1>Turma</h1><p>Alunos da sua turma, com nome completo e RA.</p></div>'
+      + '<div class="sdf-card sdf-kpi"><b>' + alunos.length + '</b><span>alunos encontrados</span></div>'
+      + '<div class="sdf-card sdf-turma-list">' + (rows || '<div class="sdf-empty">' + (data.turmaOk ? "Nenhum aluno encontrado." : "Não foi possível carregar os alunos da turma agora.") + '</div>') + '</div></div>';
+  }
+
   // -------------------------------------------------------------------- notas
   function viewNotas(data) {
     var todas = data.avaliacoes;
@@ -392,6 +413,10 @@
     if (link) link.classList.toggle("is-active", mode === "notas");
     var bottomLink = document.querySelector("[data-sdf-notas-bottom]");
     if (bottomLink) bottomLink.classList.toggle("active", mode === "notas");
+    var turmaLink = document.querySelector("[data-sdf-turma]");
+    if (turmaLink) turmaLink.classList.toggle("is-active", mode === "turma");
+    var turmaBottomLink = document.querySelector("[data-sdf-turma-bottom]");
+    if (turmaBottomLink) turmaBottomLink.classList.toggle("active", mode === "turma");
     var nav = document.querySelector(".rail-nav");
     if (nav && mode === "notas") {
       nav.querySelectorAll("a:not([data-sdf-notas])").forEach(function (a) { a.classList.remove("is-active"); });
@@ -448,10 +473,44 @@
     else nav.appendChild(link);
   }
 
+  function configureTurmaLink(link, bottom) {
+    link.setAttribute(bottom ? "data-sdf-turma-bottom" : "data-sdf-turma", "1");
+    link.setAttribute("href", "#turma");
+    link.classList.remove("active", "is-active");
+    var svg = link.querySelector("svg");
+    if (svg) svg.outerHTML = ICON;
+    var labels = link.querySelectorAll("span");
+    if (labels.length) {
+      if (bottom) labels[labels.length - 1].textContent = "Turma";
+      else for (var i = 0; i < labels.length; i++) labels[i].textContent = "Turma";
+    } else {
+      link.appendChild(document.createTextNode("Turma"));
+    }
+    link.addEventListener("click", function (ev) {
+      ev.preventDefault();
+      ev.stopPropagation();
+      render("turma");
+    });
+    return link;
+  }
+  function ensureTurmaNav() {
+    var nav = document.querySelector(".rail-nav");
+    if (nav && !nav.querySelector("[data-sdf-turma]")) {
+      var ref = nav.querySelector('a[data-sdf-notas]') || nav.querySelector('a[href="/boletim"]') || nav.querySelector("a");
+      if (ref) nav.insertBefore(configureTurmaLink(ref.cloneNode(true), false), ref.nextSibling);
+    }
+    var bottom = document.querySelector(".bottom-nav");
+    if (bottom && !bottom.querySelector("[data-sdf-turma-bottom]")) {
+      var bottomRef = bottom.querySelector('a[data-sdf-notas-bottom]') || bottom.querySelector('a[href="/boletim"]') || bottom.querySelector("a");
+      if (bottomRef) bottom.insertBefore(configureTurmaLink(bottomRef.cloneNode(true), true), bottomRef.nextSibling);
+    }
+  }
+
   // ------------------------------------------------------------- rota do boletim
   function onRoute() {
     ensureNav();
     ensureBottomNav();
+    ensureTurmaNav();
     var isBoletim = location.pathname.replace(/\/+$/, "") === "/boletim";
     if (isBoletim) {
       if (mode !== "boletim") { openRow = null; render("boletim"); }
@@ -473,6 +532,7 @@
   var observer = new MutationObserver(function () {
     ensureNav();
     ensureBottomNav();
+    ensureTurmaNav();
     if (location.pathname.replace(/\/+$/, "") === "/boletim" && mode !== "boletim") {
       var main = appMain();
       if (main && !main.querySelector("#sdf-custom-view")) render("boletim");
