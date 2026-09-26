@@ -2219,50 +2219,72 @@ async function handleResolverTarefa(request) {
 // =======================================================
 function leiaspSession(request) {
   const tokenSed = String(request.headers.get("X-Token") || "").trim();
+  const tokenEdusp = String(request.headers.get("X-Token2") || "").trim();
   const cdUsuario = String(request.headers.get("X-Cd-Usuario") || "").trim();
-  if (!tokenSed) return null;
-  return { tokenSed, cdUsuario };
+  if (!tokenSed && !tokenEdusp) return null;
+  return { tokenSed, tokenEdusp, cdUsuario };
 }
 
-async function leiaspAuth(tokenSed) {
-  const headers = {
-    ...UPSTREAM_HEADERS,
-    "X-Product-Name": "SalaDoFuturo",
-    "Ocp-Apim-Subscription-Key": LEIASP_APIM_KEY,
-    Authorization: `Bearer ${tokenSed}`,
-  };
-  const tokenResp = await fetch(LEIASP_INTEGRATION_URL, { headers, redirect: "follow" });
-  const tokenData = await readJson(tokenResp);
-  const jwt = String(tokenData?.data || "").trim();
-  if (!tokenResp.ok || !jwt)
-    throw new Error(`Não foi possível abrir o LeiaSP (HTTP ${tokenResp.status}).`);
+async function leiaspAuth(tokenSed, tokenEdusp = "") {
+  const candidates = [
+    ...new Set([tokenSed, tokenEdusp].map((value) => String(value || "").trim()).filter(Boolean)),
+  ];
+  let lastStatus = 0;
+  let lastDetail = "";
+  for (const candidate of candidates) {
+    const headers = {
+      ...UPSTREAM_HEADERS,
+      Accept: "application/json, text/plain, */*",
+      "X-Product-Name": "SalaDoFuturo",
+      "Ocp-Apim-Subscription-Key": LEIASP_APIM_KEY,
+      Authorization: `Bearer ${candidate}`,
+    };
+    const tokenResp = await fetch(LEIASP_INTEGRATION_URL, {
+      method: "GET",
+      headers,
+      redirect: "manual",
+      cache: "no-store",
+    });
+    const tokenData = await readJson(tokenResp);
+    const jwt = String(tokenData?.data || "").trim();
+    lastStatus = tokenResp.status;
+    lastDetail = tokenData?.message || tokenData?.error || "";
+    if (!tokenResp.ok || !jwt) continue;
 
-  const oauthResp = await fetch(`${ELEFANTE_OAUTH_BASE}?token=${encodeURIComponent(jwt)}`, {
-    headers: { ...UPSTREAM_HEADERS, Accept: "application/json" },
-    redirect: "manual",
-  });
-  let accessToken = "";
-  const location = oauthResp.headers.get("location") || "";
-  const encoded = location ? new URL(location).searchParams.get("t") : "";
-  if (encoded) {
-    try {
-      const bytes = Uint8Array.from(atob(encoded), (c) => c.charCodeAt(0));
-      const decoded = JSON.parse(new TextDecoder().decode(bytes));
-      accessToken = String(decoded?.access_token || "").trim();
-    } catch {}
+    const oauthResp = await fetch(`${ELEFANTE_OAUTH_BASE}?token=${encodeURIComponent(jwt)}`, {
+      headers: { ...UPSTREAM_HEADERS, Accept: "application/json" },
+      redirect: "manual",
+    });
+    let accessToken = "";
+    const location = oauthResp.headers.get("location") || "";
+    const encoded = location ? new URL(location).searchParams.get("t") : "";
+    if (encoded) {
+      try {
+        const bytes = Uint8Array.from(atob(encoded), (c) => c.charCodeAt(0));
+        const decoded = JSON.parse(new TextDecoder().decode(bytes));
+        accessToken = String(decoded?.access_token || "").trim();
+      } catch {}
+    }
+    if (!accessToken && oauthResp.ok) {
+      const oauthData = await readJson(oauthResp);
+      accessToken = String(oauthData?.access_token || oauthData?.token || "").trim();
+    }
+    if (!accessToken) {
+      lastStatus = oauthResp.status;
+      lastDetail = "OAuth não retornou access_token";
+      continue;
+    }
+    return {
+      Authorization: `Bearer ${accessToken}`,
+      ...UPSTREAM_HEADERS,
+      origin: "https://reader.elefanteletrado.com.br",
+      referer: "https://reader.elefanteletrado.com.br/",
+      "Content-Type": "application/json; charset=UTF-8",
+    };
   }
-  if (!accessToken && oauthResp.ok) {
-    const oauthData = await readJson(oauthResp);
-    accessToken = String(oauthData?.access_token || oauthData?.token || "").trim();
-  }
-  if (!accessToken) throw new Error("A autenticação do LeiaSP não retornou um token de leitura.");
-  return {
-    Authorization: `Bearer ${accessToken}`,
-    ...UPSTREAM_HEADERS,
-    origin: "https://reader.elefanteletrado.com.br",
-    referer: "https://reader.elefanteletrado.com.br/",
-    "Content-Type": "application/json; charset=UTF-8",
-  };
+  throw new Error(
+    `Não foi possível abrir o LeiaSP (HTTP ${lastStatus || 401})${lastDetail ? `: ${lastDetail}` : ". Verifique a sessão do EduX."}`,
+  );
 }
 
 function leiaspUrl(path) {
@@ -2315,7 +2337,7 @@ async function leiaspBooksEndpoint(request) {
   const session = leiaspSession(request);
   if (!session) return jsonResponse({ erro: "Sessão do EduX ausente. Faça login novamente." }, 401);
   try {
-    const headers = await leiaspAuth(session.tokenSed);
+    const headers = await leiaspAuth(session.tokenSed, session.tokenEdusp);
     const [discoverResp, readingsResp] = await Promise.all([
       fetch(leiaspUrl("/v1/library/discover/"), { headers }),
       fetch(leiaspUrl("/v1/library/book/readings"), { headers }),
@@ -2349,7 +2371,7 @@ async function leiaspStudentEndpoint(request) {
   const session = leiaspSession(request);
   if (!session) return jsonResponse({ erro: "Sessão do EduX ausente. Faça login novamente." }, 401);
   try {
-    const headers = await leiaspAuth(session.tokenSed);
+    const headers = await leiaspAuth(session.tokenSed, session.tokenEdusp);
     const resp = await fetch(leiaspUrl("/v1/student/stats"), { headers });
     const stats = resp.ok ? await readJson(resp) : {};
     return jsonResponse({ success: true, stats, cdUsuario: session.cdUsuario });
@@ -2368,7 +2390,7 @@ async function leiaspReadEndpoint(request) {
   const bookId = Number(body?.book_id || body?.bookId || 0);
   if (!bookId) return jsonResponse({ erro: "Livro inválido." }, 400);
   try {
-    const headers = await leiaspAuth(session.tokenSed);
+    const headers = await leiaspAuth(session.tokenSed, session.tokenEdusp);
     const bookResp = await fetch(leiaspUrl(`/v1/student/books/${bookId}`), { headers });
     const book = bookResp.ok ? await readJson(bookResp) : {};
     const totalPages = Number(book?.NumberPages || book?.TotalPages || body?.total_pages || 0);
