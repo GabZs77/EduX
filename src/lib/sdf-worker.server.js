@@ -13,6 +13,11 @@ const WORKER_BUILD = "sdf-flash-v23-20260911-direct-task-completion";
 
 const GROQ_URL = "https://api.groq.com/openai/v1/chat/completions";
 
+function getGroqApiKey(env) {
+  // A chave fica somente no ambiente do deploy; nunca use uma chave hardcoded no bundle.
+  return String(env?.GROQ_API_KEY || globalThis.GROQ_API_KEY || "").trim();
+}
+
 // Notificações: sem KV/D1/R2. O Worker mantém a lista no runtime atual.
 // O frontend também guarda um cache no localStorage para sobreviver a recarregamentos.
 // Observação: sem um banco/KV externo, nenhuma solução no Worker puro garante
@@ -852,7 +857,7 @@ async function handleGroqResearch(request, env) {
   const sourcesText = sourceList.map((source, index) => `[${index + 1}] ${source.title}\nURL: ${source.url}\nResumo: ${source.snippet}`).join("\n\n");
   const options = Array.isArray(question.options) ? question.options : [];
   const optionsText = options.map((opt, index) => `${index + 1}. ${stripHtmlServer(opt?.text ?? opt?.texto ?? opt?.label ?? opt?.statement ?? "")}`).filter(Boolean).join("\n");
-  const apiKey = String(env?.GROQ_API_KEY || GROQ_API_KEY || "").trim();
+  const apiKey = getGroqApiKey(env);
   if (!apiKey) return jsonResponse({ erro: "GROQ_API_KEY não configurada no Worker." }, 500);
   const prompt = `Você é um assistente de pesquisa e escrita escolar em português do Brasil. Produza uma resposta completa, clara e didática para o tópico abaixo, como um estudante dedicado que compreendeu o conteúdo. Use Markdown com título, introdução, desenvolvimento e conclusão quando fizer sentido. Sintetize as fontes, compare informações e não copie trechos longos. Toda afirmação factual importante deve indicar a fonte no formato [n], usando apenas os números fornecidos. Ao final, inclua uma seção ## Referências com os links numerados. Se o tópico pedir criação literária, use os fatos pesquisados como contexto e deixe claro o que é criação. Não mencione APIs, modelos, treinamento ou infraestrutura. Nunca envie a resposta para a plataforma; ela será revisada e inserida manualmente pelo aluno.\n\nTópico/enunciado:\n${query}\n${optionsText ? `\nAlternativas ou instruções adicionais:\n${optionsText}` : ""}\n\nFontes encontradas:\n${sourcesText || "Nenhuma fonte externa retornou dados; responda com cautela e informe essa limitação."}`;
   const resp = await fetch(GROQ_URL, {
@@ -885,7 +890,7 @@ async function handleGroqHelp(request, env) {
   const type = String(question.type || "desconhecido");
   const wantsAnswer = String(body?.mode || "").toLowerCase() === "answer" || /\b(resposta|gabarito|resolva|resolver)\b/i.test(String(body?.request || ""));
   const prompt = `Você é um tutor escolar do Flash, em português do Brasil. Explique a questão de forma objetiva, didática e adequada ao nível escolar. ${wantsAnswer ? "O aluno pediu explicitamente a resposta final: entregue a resposta mais provável de forma clara, começando direto com o texto da resposta, sem nenhum título como 'Resposta'. Para ordenação, liste a sequência final; para lacunas, preencha em ordem; para alternativas, indique o número e o texto. Depois explique brevemente os motivos." : "Não entregue simplesmente a resposta final: explique o conceito e mostre um caminho curto para o aluno chegar à resposta. Se houver alternativas, ajude a comparar/eliminar as opções sem apenas dizer a letra correta."} Se houver cálculo, mostre as etapas. Escreva TODAS as contas e fórmulas em texto simples e legível, usando símbolos comuns (× ÷ √ ² ³ ≤ ≥ π %), NUNCA use notação LaTeX como \times, \frac, \( \) ou $...$ — escreva por exemplo: M = 10.000 × (1 + 0,05 × 2) = 11.000. Nunca clique, preencha campos ou envie a atividade na plataforma; o aluno fará essas ações manualmente. Não termine com dica, não escreva nenhuma seção de 'Dica'.\n\nTipo da questão: ${type}\nEnunciado:\n${statement}\n${optionsText ? `\nAlternativas/itens:\n${optionsText}` : ""}`.trim();
-  const apiKey = String(env?.GROQ_API_KEY || GROQ_API_KEY || "").trim();
+  const apiKey = getGroqApiKey(env);
   if (!apiKey) return jsonResponse({ erro: "GROQ_API_KEY não configurada no Worker." }, 500);
 
   const MODELS = ["openai/gpt-oss-20b", "llama-3.3-70b-versatile", "llama-3.1-8b-instant"];
@@ -955,7 +960,7 @@ async function handleGroqChat(request, env) {
   const messages = Array.isArray(body?.messages) ? body.messages : [];
   const imageBase64 = typeof body?.image === "string" ? body.image.trim() : "";
   const mime = String(body?.imageMime || "image/jpeg").split(";")[0] || "image/jpeg";
-  const apiKey = String(env?.GROQ_API_KEY || GROQ_API_KEY || "").trim();
+  const apiKey = getGroqApiKey(env);
   if (!apiKey) return jsonResponse({ erro: "GROQ_API_KEY não configurada no Worker." }, 500);
   if (!messages.length && !imageBase64) return jsonResponse({ erro: "Mensagem vazia." }, 400);
 
@@ -990,18 +995,25 @@ async function handleGroqChat(request, env) {
       temperature: imageBase64 ? 0.35 : 0.65,
       max_completion_tokens: 2048
     };
-    const resp = await fetch(GROQ_URL, {
-      method: "POST",
-      headers: { "Content-Type": "application/json", "Authorization": `Bearer ${apiKey}` },
-      body: JSON.stringify(payload)
-    });
-    const data = await readJson(resp);
+    let resp, data;
+    try {
+      resp = await fetch(GROQ_URL, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "Authorization": `Bearer ${apiKey}` },
+        body: JSON.stringify(payload)
+      });
+      data = await readJson(resp);
+    } catch (error) {
+      lastStatus = 502;
+      lastData = { message: String(error?.message || error) };
+      continue;
+    }
     if (resp.ok) {
       return jsonResponse({ ok: true, response: data?.choices?.[0]?.message?.content || "Sem resposta", model });
     }
     lastData = data; lastStatus = resp.status;
-    // 400/404 = modelo indisponível: tenta o próximo. Outros erros interrompem.
-    if (resp.status !== 400 && resp.status !== 404) break;
+    // 400/404 = modelo indisponível: tenta o próximo. Erros transitórios também tentam fallback.
+    if (resp.status !== 400 && resp.status !== 404 && resp.status !== 429 && resp.status < 500) break;
   }
   const message = lastData?.error?.message || lastData?.message || `Groq retornou HTTP ${lastStatus}`;
   return jsonResponse({ erro: "Falha na Groq", detalhe: message, upstream_status: lastStatus, groq_error: lastData?.error || null }, lastStatus);
