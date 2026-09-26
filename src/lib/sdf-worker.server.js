@@ -107,19 +107,44 @@ function currentAnoLetivo() {
   return new Date().getFullYear();
 }
 
-function numberValue(value) {
+function numberValue(value, seen = new Set()) {
   if (typeof value === "number" && Number.isFinite(value)) return value;
   if (typeof value === "string" && value.trim()) {
     const cleaned = value.trim().replace(/%$/, "").replace(/\.(?=\d{3}(?:\D|$))/g, "").replace(",", ".");
     const n = Number(cleaned);
     return Number.isFinite(n) ? n : null;
   }
+  if (value && typeof value === "object" && !seen.has(value)) {
+    seen.add(value);
+    for (const key of ["value", "valor", "nota", "notaAtribuida", "notaObtida", "notaFinal", "valorNota", "score", "grade"]) {
+      const nested = numberValue(value[key], seen);
+      if (nested !== null) return nested;
+    }
+  }
   return null;
 }
 function firstValue(row, keys) {
-  for (const key of keys) {
-    const value = row?.[key];
-    if (value !== null && value !== undefined && value !== "") return value;
+  if (!row || typeof row !== "object") return null;
+  const wanted = new Set(keys.map((key) => String(key).toLowerCase().replace(/[^a-z0-9]/g, "")));
+  for (const [key, value] of Object.entries(row)) {
+    if (wanted.has(key.toLowerCase().replace(/[^a-z0-9]/g, "")) && value !== null && value !== undefined && value !== "") return value;
+  }
+  return null;
+}
+function findNoteValue(value, seen = new Set()) {
+  if (!value || typeof value !== "object" || seen.has(value)) return null;
+  seen.add(value);
+  const preferred = ["notaAtribuida", "nota", "valorNota", "notaAluno", "notaLancada", "notaObtida", "notaAvaliacao", "notaFinal", "mediaFinal", "score", "grade"];
+  for (const [key, nested] of Object.entries(value)) {
+    const normalized = key.toLowerCase().replace(/[^a-z0-9]/g, "");
+    if (preferred.includes(normalized) || /nota|score|grade/.test(normalized)) {
+      const number = numberValue(nested);
+      if (number !== null) return number;
+    }
+  }
+  for (const nested of Object.values(value)) {
+    const number = findNoteValue(nested, seen);
+    if (number !== null) return number;
   }
   return null;
 }
@@ -1242,7 +1267,7 @@ function normalizeAvaliacoes(data, disciplinaPorId) {
   const rows = unwrapSedList(data).filter((row) => row && typeof row === "object" && !row.dataExclusao && !row.DataExclusao);
   const list = rows.map((row, index) => {
     const id = firstValue(row, ["disciplinaId", "DisciplinaId", "codigoDisciplina", "CodigoDisciplina"]);
-    const nota = firstValue(row, ["notaAtribuida", "NotaAtribuida", "nota", "Nota", "valorNota", "ValorNota", "notaAluno", "NotaAluno", "notaLancada", "NotaLancada", "notaFinal", "NotaFinal"]);
+    const nota = firstValue(row, ["notaAtribuida", "nota", "valorNota", "notaAluno", "notaLancada", "notaObtida", "notaAvaliacao", "notaFinal", "mediaFinal", "score", "grade"]) ?? findNoteValue(row);
     const bimestreRaw = firstValue(row, ["bimestre", "Bimestre", "bimestreNumero", "BimestreNumero", "periodo", "Periodo"]);
     const bimestreMatch = String(bimestreRaw ?? "").match(/[1-4]/);
     return {
