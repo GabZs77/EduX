@@ -1284,8 +1284,13 @@ function normalizeAvaliacoes(data, disciplinaPorId) {
     const nota = firstNoteValue(row, ["notaAtribuida", "nota", "valorNota", "notaAluno", "notaLancada", "notaObtida", "notaAvaliacao", "notaFinal", "notaAtribuidaMediaFinal", "notaMediaFinal", "mediaFinal", "score", "grade"]) ?? findNoteValue(row);
     const bimestreRaw = firstValue(row, ["bimestre", "Bimestre", "bimestreNumero", "BimestreNumero", "periodo", "Periodo"]);
     const bimestreMatch = String(bimestreRaw ?? "").match(/[1-4]/);
+    const avaliacaoId = firstValue(row, ["avaliacaoId", "AvaliacaoId", "idAvaliacao", "IdAvaliacao"]);
+    const notaId = firstValue(row, ["avaliacaoNotaId", "AvaliacaoNotaId", "notaId", "NotaId"]);
     return {
-      id: firstValue(row, ["avaliacaoNotaId", "AvaliacaoNotaId", "avaliacaoId", "AvaliacaoId"]) ?? `av-${index}`,
+      // O ID da avaliação existe mesmo quando notaAtribuida ainda é nula.
+      id: avaliacaoId ?? notaId ?? `av-${index}`,
+      avaliacaoId,
+      avaliacaoNotaId: notaId,
       prova: String(firstValue(row, ["descricaoAvaliacao", "DescricaoAvaliacao", "nomeAvaliacao", "NomeAvaliacao", "descricao", "Descricao"]) || "Avaliação").trim(),
       data: firstValue(row, ["dataAvaliacao", "DataAvaliacao", "data", "Data"]),
       nota: numberValue(nota),
