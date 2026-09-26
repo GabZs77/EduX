@@ -17,6 +17,23 @@ function getGroqApiKey(env) {
   // A chave fica somente no ambiente do deploy; nunca use uma chave hardcoded no bundle.
   return String(env?.GROQ_API_KEY || globalThis.GROQ_API_KEY || "").trim();
 }
+function compactGroqMessages(messages, maxChars = 22000) {
+  const normalized = Array.isArray(messages) ? messages.map((message) => ({
+    role: message?.role === "assistant" ? "assistant" : "user",
+    content: typeof message?.content === "string" ? message.content : message?.content,
+  })) : [];
+  let remaining = maxChars;
+  return normalized.slice(-12).reverse().map((message) => {
+    if (typeof message.content !== "string") return message;
+    const content = message.content;
+    const take = Math.max(0, Math.min(content.length, remaining));
+    remaining -= take;
+    if (take >= content.length) return message;
+    const head = content.slice(0, Math.ceil(take * 0.68));
+    const tail = content.slice(-Math.floor(take * 0.32));
+    return { ...message, content: `${head}\n\n[Conteúdo intermediário reduzido para manter a resposta disponível.]\n\n${tail}` };
+  }).reverse();
+}
 
 // Notificações: sem KV/D1/R2. O Worker mantém a lista no runtime atual.
 // O frontend também guarda um cache no localStorage para sobreviver a recarregamentos.
@@ -893,7 +910,7 @@ async function handleGroqHelp(request, env) {
   const apiKey = getGroqApiKey(env);
   if (!apiKey) return jsonResponse({ erro: "GROQ_API_KEY não configurada no Worker." }, 500);
 
-  const MODELS = ["openai/gpt-oss-20b", "llama-3.3-70b-versatile", "llama-3.1-8b-instant"];
+  const MODELS = ["openai/gpt-oss-20b", "llama-3.3-70b-versatile"];
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   let lastStatus = 502;
   let lastMessage = "A IA não respondeu.";
@@ -964,10 +981,7 @@ async function handleGroqChat(request, env) {
   if (!apiKey) return jsonResponse({ erro: "GROQ_API_KEY não configurada no Worker." }, 500);
   if (!messages.length && !imageBase64) return jsonResponse({ erro: "Mensagem vazia." }, 400);
 
-  const safeMessages = messages.slice(-12).map(m => ({
-    role: m?.role === "assistant" ? "assistant" : "user",
-    content: String(m?.content || "")
-  }));
+  const safeMessages = compactGroqMessages(messages);
   if (!safeMessages.length) safeMessages.push({ role: "user", content: "Analise a imagem enviada." });
 
   if (imageBase64) {
@@ -981,7 +995,7 @@ async function handleGroqChat(request, env) {
 
   const models = imageBase64
     ? ["meta-llama/llama-4-scout-17b-16e-instruct", "meta-llama/llama-4-maverick-17b-128e-instruct"]
-    : ["llama-3.3-70b-versatile", "openai/gpt-oss-20b", "llama-3.1-8b-instant"];
+    : ["llama-3.3-70b-versatile", "openai/gpt-oss-20b"];
 
   let lastData = null;
   let lastStatus = 502;
