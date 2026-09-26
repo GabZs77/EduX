@@ -23,8 +23,12 @@ function addPlatformsLink(nav: Element | null, mobile = false) {
 }
 
 export function SdfApp() {
+  const isStandaloneRoute =
+    typeof window !== "undefined" &&
+    (window.location.pathname === "/plataformas" || window.location.pathname === "/leiasp");
+
   useEffect(() => {
-    if (window.location.pathname === "/plataformas") return;
+    if (isStandaloneRoute) return;
 
     // O bundle legado declara variáveis no escopo global (script clássico).
     // Executá-lo duas vezes causa "Identifier 'x' has already been declared"
@@ -74,8 +78,8 @@ export function SdfApp() {
     }
 
     return () => taskUiObserver.disconnect();
-  }, []);
+  }, [isStandaloneRoute]);
 
-  if (typeof window !== "undefined" && window.location.pathname === "/plataformas") return null;
+  if (isStandaloneRoute) return null;
   return <div id="root" />;
 }
