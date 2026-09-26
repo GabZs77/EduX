@@ -11,6 +11,7 @@
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as IndexRouteImport } from './routes/index'
 import { Route as SplatRouteImport } from './routes/$'
+import { Route as PlataformasRouteImport } from './routes/plataformas'
 import { Route as ApiPublicSdfSplatRouteImport } from './routes/api/public/sdf/$'
 
 const IndexRoute = IndexRouteImport.update({
@@ -23,6 +24,11 @@ const SplatRoute = SplatRouteImport.update({
   path: '/$',
   getParentRoute: () => rootRouteImport,
 } as any)
+const PlataformasRoute = PlataformasRouteImport.update({
+  id: '/plataformas',
+  path: '/plataformas',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const ApiPublicSdfSplatRoute = ApiPublicSdfSplatRouteImport.update({
   id: '/api/public/sdf/$',
   path: '/api/public/sdf/$',
@@ -32,30 +38,34 @@ const ApiPublicSdfSplatRoute = ApiPublicSdfSplatRouteImport.update({
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
   '/$': typeof SplatRoute
+  '/plataformas': typeof PlataformasRoute
   '/api/public/sdf/$': typeof ApiPublicSdfSplatRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/$': typeof SplatRoute
+  '/plataformas': typeof PlataformasRoute
   '/api/public/sdf/$': typeof ApiPublicSdfSplatRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
   '/$': typeof SplatRoute
+  '/plataformas': typeof PlataformasRoute
   '/api/public/sdf/$': typeof ApiPublicSdfSplatRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
-  fullPaths: '/' | '/$' | '/api/public/sdf/$'
+  fullPaths: '/' | '/$' | '/plataformas' | '/api/public/sdf/$'
   fileRoutesByTo: FileRoutesByTo
-  to: '/' | '/$' | '/api/public/sdf/$'
-  id: '__root__' | '/' | '/$' | '/api/public/sdf/$'
+  to: '/' | '/$' | '/plataformas' | '/api/public/sdf/$'
+  id: '__root__' | '/' | '/$' | '/plataformas' | '/api/public/sdf/$'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
   SplatRoute: typeof SplatRoute
+  PlataformasRoute: typeof PlataformasRoute
   ApiPublicSdfSplatRoute: typeof ApiPublicSdfSplatRoute
 }
 
@@ -75,6 +85,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof SplatRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/plataformas': {
+      id: '/plataformas'
+      path: '/plataformas'
+      fullPath: '/plataformas'
+      preLoaderRoute: typeof PlataformasRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/api/public/sdf/$': {
       id: '/api/public/sdf/$'
       path: '/api/public/sdf/$'
@@ -88,6 +105,7 @@ declare module '@tanstack/react-router' {
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   SplatRoute: SplatRoute,
+  PlataformasRoute: PlataformasRoute,
   ApiPublicSdfSplatRoute: ApiPublicSdfSplatRoute,
 }
 export const routeTree = rootRouteImport

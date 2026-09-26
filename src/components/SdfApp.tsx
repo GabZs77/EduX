@@ -10,8 +10,22 @@ export const sdfHeadLinks = [
   { rel: "stylesheet", href: "/sdf-app.css" },
 ];
 
+function addPlatformsLink(nav: Element | null, mobile = false) {
+  if (!nav || nav.querySelector('a[href="/plataformas"]')) return;
+  const link = document.createElement("a");
+  link.href = "/plataformas";
+  link.className = mobile ? "bottom-link" : "rail-link";
+  link.setAttribute("aria-label", "Plataformas");
+  link.innerHTML = mobile
+    ? '<span class="bottom-icon-wrap">▦</span><span>Plataformas</span>'
+    : '<span aria-hidden="true" style="font-size:19px;line-height:1">▦</span><span>Plataformas</span>';
+  nav.appendChild(link);
+}
+
 export function SdfApp() {
   useEffect(() => {
+    if (window.location.pathname === "/plataformas") return;
+
     // O bundle legado declara variáveis no escopo global (script clássico).
     // Executá-lo duas vezes causa "Identifier 'x' has already been declared"
     // e deixa a tela em branco — por isso ele é montado uma única vez.
@@ -43,6 +57,8 @@ export function SdfApp() {
         if (section.textContent?.toLocaleLowerCase("pt-BR").includes("atividades pendentes"))
           section.remove();
       });
+      addPlatformsLink(document.querySelector(".rail-nav"));
+      addPlatformsLink(document.querySelector(".bottom-nav"), true);
     };
     const taskUiObserver = new MutationObserver(removeTaskUi);
     taskUiObserver.observe(document.body, { childList: true, subtree: true });
@@ -56,7 +72,10 @@ export function SdfApp() {
       extras.defer = true;
       document.body.appendChild(extras);
     }
+
+    return () => taskUiObserver.disconnect();
   }, []);
 
+  if (typeof window !== "undefined" && window.location.pathname === "/plataformas") return null;
   return <div id="root" />;
 }
