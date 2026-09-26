@@ -429,10 +429,10 @@ async function fetchTasks(token2, rooms, username) {
 
   try {
     const result = await fetchTasksForTargets(token2, baseTargets, {
-      statuses: ["draft"],
-      filterExpired: true,
-      expiredOnly: false,
-    });
+  statuses: ["draft", "pending"],
+  filterExpired: true,
+  expiredOnly: false,
+});
     lastResp = result.resp; lastData = result.data;
     if (result.resp?.ok) rawTasks.push(...extractTasks(result.data));
   } catch {}
