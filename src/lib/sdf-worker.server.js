@@ -217,7 +217,6 @@ function normalizeRoom(room) {
     escola: room?.NomeEscola ?? room?.nomeEscola ?? "",
     codigoEscola: room?.CodigoEscola ?? room?.codigoEscola ?? null,
     curso: name ? name.split(" - ")[0] : "",
-    raw: room,
   };
 }
 
@@ -422,58 +421,6 @@ async function fetchTurmas(cdUsuarioCurto, token) {
     { subKey: SUBSCRIPTION_KEYS.hub, token },
   );
   return { resp, data, rooms: unwrapSedList(data).map(normalizeRoom) };
-}
-
-function extractStudentRows(data, seen = new Set()) {
-  if (!data || typeof data !== "object" || seen.has(data)) return [];
-  if (Array.isArray(data)) return data.flatMap((item) => extractStudentRows(item, seen));
-  seen.add(data);
-  for (const key of ["alunos", "alunosTurma", "estudantes", "students", "data", "items", "result", "results", "value"]) {
-    if (data[key] && typeof data[key] === "object") {
-      const rows = extractStudentRows(data[key], seen);
-      if (rows.length) return rows;
-    }
-  }
-  const name = firstValue(data, ["nomeCompleto", "NomeCompleto", "nomeAluno", "NomeAluno", "nome", "Nome", "alunoNome", "AlunoNome", "name"]);
-  const ra = firstValue(data, ["ra", "RA", "registroAcademico", "RegistroAcademico", "numeroRa", "NumeroRa", "codigoAluno", "CodigoAluno", "cdAluno", "CdAluno"]);
-  return name || ra ? [data] : [];
-}
-function normalizeStudent(row, index, room) {
-  const nome = String(firstValue(row, ["nomeCompleto", "NomeCompleto", "nomeAluno", "NomeAluno", "nome", "Nome", "alunoNome", "AlunoNome", "name"]) || "").trim();
-  const ra = String(firstValue(row, ["ra", "RA", "registroAcademico", "RegistroAcademico", "numeroRa", "NumeroRa", "codigoAluno", "CodigoAluno", "cdAluno", "CdAluno"]) || "").trim();
-  if (!nome && !ra) return null;
-  return { id: ra || `${room.id || "turma"}-${index}`, nome: nome || "Aluno", ra, turmaId: room.id, turma: room.name };
-}
-async function fetchAlunosDaTurma(room, token) {
-  if (!room?.id) return [];
-  const embedded = extractStudentRows(room.raw);
-  if (embedded.length) return embedded.map((row, index) => normalizeStudent(row, index, room)).filter(Boolean);
-  const codigo = encodeURIComponent(room.id);
-  const candidates = [
-    `apihubintegracoes/api/v2/Turma/ListarAlunosPorTurma?codigoTurma=${codigo}`,
-    `apihubintegracoes/api/v2/Aluno/ListarAlunosPorTurma?codigoTurma=${codigo}`,
-    `apihubintegracoes/api/v2/Turma/ObterAlunosPorTurma?codigoTurma=${codigo}`,
-  ];
-  for (const path of candidates) {
-    const result = await sedGet(path, { subKey: SUBSCRIPTION_KEYS.hub, token });
-    if (!result.resp?.ok) continue;
-    const rows = extractStudentRows(result.data);
-    if (rows.length) return rows.map((row, index) => normalizeStudent(row, index, room)).filter(Boolean);
-  }
-  return [];
-}
-async function handleTurma(request) {
-  const { token, cdUsuario } = sedSessionFrom(request);
-  if (!cdUsuario) return jsonResponse({ ok: false, erro: "Sessão inválida", data: [] }, 400);
-  const turmaResult = await fetchTurmas(cdUsuario, token);
-  const alunosPorTurma = await Promise.all(turmaResult.rooms.map((room) => fetchAlunosDaTurma(room, token)));
-  const alunos = alunosPorTurma.flat();
-  const unique = new Map();
-  for (const aluno of alunos) {
-    const key = `${aluno.turmaId || ""}:${aluno.ra || aluno.nome}`;
-    if (!unique.has(key)) unique.set(key, aluno);
-  }
-  return jsonResponse({ ok: turmaResult.resp?.ok && alunos.length > 0, data: Array.from(unique.values()), turmas: turmaResult.rooms.map(({ id, name, numeroClasse, escola }) => ({ id, name, numeroClasse, escola })) });
 }
 
 async function fetchTasksForTargets(token2, targets, options = {}) {
@@ -1562,7 +1509,6 @@ export default {
       if (path === "/agenda" && request.method === "GET") return handleAgenda(request, url);
       if (path === "/boletim" && request.method === "GET") return handleBoletim(request, url);
       if ((path === "/notas" || path === "/avaliacoes") && request.method === "GET") return handleNotas(request, url);
-      if (path === "/turma" && request.method === "GET") return handleTurma(request);
       if ((path === "/frequencia" || path === "/presenca") && request.method === "GET") return handleFrequencia(request, url);
       if (path === "/tarefas" && request.method === "GET") return handleDashboard(request);
       if (path === "/captcha/challenge" && request.method === "POST") return handleCaptchaChallenge(request);
