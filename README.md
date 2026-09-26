@@ -12,7 +12,7 @@ EduX é uma plataforma estudantil em português que reúne agenda, presença, bo
 
 ## Plataformas
 
-A navegação principal agora inclui a aba **Plataformas**, com a integração do **LeiaSP** fornecida em `integrations/leiasp/`.
+A navegação principal agora inclui a aba **Plataformas**. Ao clicar no cartão **LeiaSP**, o EduX abre uma página dedicada em tela cheia, que exibe as informações do aluno logado e a biblioteca de livros. A interface original do LeiaSP já possui o fluxo de seleção: ao clicar em um livro, ele inicia a leitura configurada.
 
 O LeiaSP é uma aplicação FastAPI independente, por isso seu backend roda como um serviço separado do frontend EduX. Para executar localmente:
 
@@ -56,7 +56,8 @@ O projeto utiliza o build padrão do Vite/TanStack Start e está preparado para 
 ## Estrutura principal
 
 - `src/routes/`: rotas TanStack Router e shell da aplicação.
-- `src/routes/plataformas.tsx`: tela da aba Plataformas e incorporação do LeiaSP.
+- `src/routes/plataformas.tsx`: seleção de plataformas.
+- `src/routes/leiasp.tsx`: tela cheia e incorporação da experiência LeiaSP.
 - `src/components/SdfApp.tsx`: montagem do bundle principal e link da navegação legada.
 - `public/sdf-app.js` e `public/sdf-app.css`: aplicação e estilos principais distribuídos como assets estáticos.
 - `integrations/leiasp/`: aplicação LeiaSP extraída do ZIP fornecido.

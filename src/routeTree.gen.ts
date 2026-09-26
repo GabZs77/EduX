@@ -11,6 +11,7 @@
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as IndexRouteImport } from './routes/index'
 import { Route as SplatRouteImport } from './routes/$'
+import { Route as LeiaspRouteImport } from './routes/leiasp'
 import { Route as PlataformasRouteImport } from './routes/plataformas'
 import { Route as ApiPublicSdfSplatRouteImport } from './routes/api/public/sdf/$'
 
@@ -22,6 +23,11 @@ const IndexRoute = IndexRouteImport.update({
 const SplatRoute = SplatRouteImport.update({
   id: '/$',
   path: '/$',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const LeiaspRoute = LeiaspRouteImport.update({
+  id: '/leiasp',
+  path: '/leiasp',
   getParentRoute: () => rootRouteImport,
 } as any)
 const PlataformasRoute = PlataformasRouteImport.update({
@@ -38,12 +44,14 @@ const ApiPublicSdfSplatRoute = ApiPublicSdfSplatRouteImport.update({
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
   '/$': typeof SplatRoute
+  '/leiasp': typeof LeiaspRoute
   '/plataformas': typeof PlataformasRoute
   '/api/public/sdf/$': typeof ApiPublicSdfSplatRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/$': typeof SplatRoute
+  '/leiasp': typeof LeiaspRoute
   '/plataformas': typeof PlataformasRoute
   '/api/public/sdf/$': typeof ApiPublicSdfSplatRoute
 }
@@ -51,20 +59,22 @@ export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
   '/$': typeof SplatRoute
+  '/leiasp': typeof LeiaspRoute
   '/plataformas': typeof PlataformasRoute
   '/api/public/sdf/$': typeof ApiPublicSdfSplatRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
-  fullPaths: '/' | '/$' | '/plataformas' | '/api/public/sdf/$'
+  fullPaths: '/' | '/$' | '/leiasp' | '/plataformas' | '/api/public/sdf/$'
   fileRoutesByTo: FileRoutesByTo
-  to: '/' | '/$' | '/plataformas' | '/api/public/sdf/$'
-  id: '__root__' | '/' | '/$' | '/plataformas' | '/api/public/sdf/$'
+  to: '/' | '/$' | '/leiasp' | '/plataformas' | '/api/public/sdf/$'
+  id: '__root__' | '/' | '/$' | '/leiasp' | '/plataformas' | '/api/public/sdf/$'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
   SplatRoute: typeof SplatRoute
+  LeiaspRoute: typeof LeiaspRoute
   PlataformasRoute: typeof PlataformasRoute
   ApiPublicSdfSplatRoute: typeof ApiPublicSdfSplatRoute
 }
@@ -83,6 +93,13 @@ declare module '@tanstack/react-router' {
       path: '/$'
       fullPath: '/$'
       preLoaderRoute: typeof SplatRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/leiasp': {
+      id: '/leiasp'
+      path: '/leiasp'
+      fullPath: '/leiasp'
+      preLoaderRoute: typeof LeiaspRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/plataformas': {
@@ -105,6 +122,7 @@ declare module '@tanstack/react-router' {
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   SplatRoute: SplatRoute,
+  LeiaspRoute: LeiaspRoute,
   PlataformasRoute: PlataformasRoute,
   ApiPublicSdfSplatRoute: ApiPublicSdfSplatRoute,
 }

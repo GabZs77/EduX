@@ -1635,11 +1635,27 @@ function renderLeiaSPBooks() {
     });
   });
 
+  const startBookImmediately = (book) => {
+    if (!book) return;
+    openLeiaSPModal(book, false);
+    startLeiaSPReading();
+  };
+
+  el.leiaspGrid.querySelectorAll('.leiasp-card').forEach(card => {
+    card.style.cursor = 'pointer';
+    card.addEventListener('click', (event) => {
+      if (event.target.closest('button')) return;
+      const bookId = parseInt(card.dataset.bookId);
+      const book = state.leiaspBooks.find(b => b.id === bookId);
+      startBookImmediately(book);
+    });
+  });
+
   el.leiaspGrid.querySelectorAll('.btn-read-book').forEach(btn => {
     btn.addEventListener('click', () => {
       const bookId = parseInt(btn.dataset.bookId);
       const book = state.leiaspBooks.find(b => b.id === bookId);
-      if (book) openLeiaSPModal(book, false);
+      startBookImmediately(book);
     });
   });
 }
