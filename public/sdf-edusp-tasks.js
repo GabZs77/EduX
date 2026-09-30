@@ -118,7 +118,7 @@
     return targets;
   }
 
-  async function fetchTodo(apiKey, targets) {
+  async function fetchTodo(apiKey, targets, opts) {
     var p = new URLSearchParams();
     p.set("expired_only", "false");
     p.set("limit", "100");
@@ -128,7 +128,12 @@
     p.set("with_answer", "true");
     p.set("is_essay", "false");
     targets.forEach(function (t) { p.append("publication_target", t); });
-    p.append("answer_statuses", "draft");
+    if (!(opts && opts.ignoreStatuses)) {
+      // Busca rascunhos E tarefas não iniciadas (pending); sem isso as
+      // pendências novas nunca aparecem e o contador fica em 0.
+      p.append("answer_statuses", "draft");
+      p.append("answer_statuses", "pending");
+    }
     p.set("with_apply_moment", "true");
     var resp = await originalFetch(EDUSP + "/tms/task/todo?" + p.toString(), { headers: eduspHeaders(apiKey) });
     if (!resp.ok) throw new Error("tms/task/todo " + resp.status);
@@ -163,6 +168,10 @@
     var targets = buildTargets(rooms, creds.nick);
     if (!targets.length) return { tasks: [], targets: targets, rooms: rooms };
     var raws = await fetchTodo(creds.apiKey, targets);
+    if (!raws.length) {
+      // Última tentativa: sem filtro de status, exatamente como a plataforma oficial.
+      raws = await fetchTodo(creds.apiKey, targets, { ignoreStatuses: true });
+    }
     var topics = {};
     rooms.forEach(function (r) { if (r && r.name) topics[r.name] = r.topic || r.name; });
     var tasks = raws
@@ -187,6 +196,63 @@
     cache = { at: Date.now(), key: key, promise: promise };
     return promise;
   }
+
+
+  /* ---- Turma e sala abaixo do nome do aluno ---- */
+  var lastTurmaTexto = "";
+
+  function pickField(obj, pattern) {
+    for (var key in obj) {
+      if (Object.prototype.hasOwnProperty.call(obj, key) && pattern.test(key)) {
+        var v = obj[key];
+        if (v != null && String(v).trim()) return String(v).trim();
+      }
+    }
+    return "";
+  }
+
+  function buildTurmaLabel(turmas, rooms) {
+    var turma = "";
+    var sala = "";
+    var lista = Array.isArray(turmas) ? turmas : [];
+    for (var i = 0; i < lista.length; i++) {
+      var t = lista[i];
+      if (!t || typeof t !== "object") continue;
+      if (!turma) turma = pickField(t, /turma|serie|s\u00e9rie/i) || pickField(t, /^nome$/i);
+      if (!sala) sala = pickField(t, /sala/i);
+      if (turma && sala) break;
+    }
+    if (!turma && Array.isArray(rooms)) {
+      for (var j = 0; j < rooms.length; j++) {
+        var r = rooms[j];
+        if (r && r.name) { turma = String(r.name).trim(); break; }
+      }
+    }
+    if (!turma && !sala) return "";
+    if (turma && sala) return "Turma: " + turma + " \u2022 Sala: " + sala;
+    return turma ? "Turma: " + turma : "Sala: " + sala;
+  }
+
+  function showTurmaLine(text) {
+    lastTurmaTexto = text;
+    var h1 = document.querySelector(".page-heading h1") || document.querySelector("h1");
+    if (!h1) return;
+    var existing = document.getElementById("sdf-turma-line");
+    if (existing) { existing.textContent = text; return; }
+    var p = document.createElement("p");
+    p.id = "sdf-turma-line";
+    p.textContent = text;
+    p.style.cssText = "margin:4px 0 0;font-size:.95rem;font-weight:500;opacity:.85;";
+    h1.insertAdjacentElement("afterend", p);
+  }
+
+  // O painel pode renderizar depois da resposta chegar; observa o DOM.
+  var observer = new MutationObserver(function () {
+    if (!lastTurmaTexto || document.getElementById("sdf-turma-line")) return;
+    var h1 = document.querySelector(".page-heading h1") || document.querySelector("h1");
+    if (h1) showTurmaLine(lastTurmaTexto);
+  });
+  if (document.body) observer.observe(document.body, { childList: true, subtree: true });
 
   window.fetch = async function (input, init) {
     var url = typeof input === "string" ? input : (input && input.url) || "";
@@ -213,6 +279,8 @@
       data.pendencias = merged.filter(function (t) { return t.status === "pending"; }).length;
       data.targets = browser.targets;
       data.tarefasFonte = "navegador";
+      var turmaTexto = buildTurmaLabel(data.turmas, browser.rooms);
+      if (turmaTexto) showTurmaLine(turmaTexto);
       var headers = new Headers(resp.headers);
       headers.delete("content-length");
       headers.delete("content-encoding");
