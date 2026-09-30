@@ -377,6 +377,8 @@ function normalizeTask(task, roomName = "") {
   const answered = ["submitted", "completed", "done", "finished"].includes(status);
   if (!answered && !["expired", "overdue"].includes(status)) status = "pending";
   if (["overdue"].includes(status)) status = "expired";
+  const publicationTarget = taskRoomTarget(task, "");
+  const identifiedRoom = String(roomName || publicationTarget || "").trim();
   return {
     id: task?.id ?? task?.task_id ?? task?.taskId ?? null,
     title: task?.title ?? task?.name ?? task?.titulo ?? task?.description ?? "Tarefa",
@@ -387,7 +389,10 @@ function normalizeTask(task, roomName = "") {
       task?.subject ??
       task?.materia ??
       "",
-    room: taskRoomTarget(task, roomName),
+    room: identifiedRoom,
+    turma: identifiedRoom,
+    turmaIdentificada: Boolean(identifiedRoom),
+    publicationTarget,
     status,
     answerStatus: rawStatus,
     due,
@@ -767,7 +772,7 @@ async function fetchTasks(token2, rooms, username) {
     );
     if (seen.has(id)) continue;
     seen.add(id);
-    const task = normalizeTask(raw, findRoomForTask(raw, rooms));
+    const task = normalizeTask(raw, findRoomForTask(raw, rooms, roomResult.data));
     // Somente tarefas pendentes: entregues e expiradas ficam de fora.
     if (task.status !== "pending") continue;
     const answered = raw?.answer_status ?? raw?.answerStatus ?? null;
@@ -786,7 +791,21 @@ async function fetchTasks(token2, rooms, username) {
   };
 }
 
-function findRoomForTask(task, rooms) {
+function findRoomForTask(task, rooms, eduspRoomData = null) {
+  const target = taskRoomTarget(task, "").toLowerCase();
+  for (const room of eduspRoomData?.rooms || []) {
+    const name = String(room?.name || "").trim();
+    if (!name) continue;
+    const values = [name, ...(room?.group_categories || []).map((category) => category?.id)];
+    if (values.some((value) => String(value || "").trim().toLowerCase() === target)) return name;
+  }
+  for (const room of rooms) {
+    const name = String(room?.name || "").trim();
+    if (!name) continue;
+    const normalizedName = name.toLowerCase();
+    if (target === normalizedName || target.startsWith(`${normalizedName}:`)) return name;
+    if (room.id !== null && target === String(room.id).toLowerCase()) return name;
+  }
   const text = JSON.stringify(task || "").toLowerCase();
   for (const room of rooms) {
     if (room.name && text.includes(room.name.toLowerCase())) return room.name;
@@ -1750,11 +1769,16 @@ async function handleDashboard(request) {
   }
   const taskResult = await fetchTasks(currentTaskToken, rooms, username);
   const surveyPending = await fetchSurveyTodoCount(currentTaskToken, taskResult.roomData, username, true).catch(() => ({ resp: { ok: false, status: 502 }, count: 0 }));
+  const turmasIdentificadas = Array.from(new Set([
+    ...rooms.map((room) => room?.name).filter(Boolean),
+    ...(taskResult.roomData?.rooms || []).map((room) => room?.name).filter(Boolean),
+  ]));
   const aluno = alunoResult.data;
   const alunoData = aluno?.data && typeof aluno.data === "object" ? aluno.data : aluno;
   return jsonResponse({
     aluno: alunoData || {},
     turmas: rooms,
+    turmasIdentificadas,
     tarefas: taskResult.tasks,
     pendencias: surveyPending.count || taskResult.tasks.filter((t) => t.status === "pending").length,
 
