@@ -43,30 +43,13 @@ export function SdfApp() {
     script.src = "/sdf-app.js";
     document.body.appendChild(script);
 
-    const removeTaskUi = () => {
-      if (window.location.pathname === "/tarefas") {
-        window.history.replaceState({}, "", "/");
-        window.dispatchEvent(new PopStateEvent("popstate"));
-      }
-      document.querySelectorAll('a[href="/tarefas"]').forEach((link) => {
-        const container = link.closest(".stat-link, .text-link");
-        (container || link).remove();
-      });
-      document
-        .querySelectorAll(".rail-nav a, .bottom-nav a, .login-utility-list span")
-        .forEach((item) => {
-          if (item.textContent?.trim().toLocaleLowerCase("pt-BR").includes("tarefa")) item.remove();
-        });
-      document.querySelectorAll("section.section-block").forEach((section) => {
-        if (section.textContent?.toLocaleLowerCase("pt-BR").includes("atividades pendentes"))
-          section.remove();
-      });
+    const ensureExtraLinks = () => {
       addPlatformsLink(document.querySelector(".rail-nav"));
       addPlatformsLink(document.querySelector(".bottom-nav"), true);
     };
-    const taskUiObserver = new MutationObserver(removeTaskUi);
-    taskUiObserver.observe(document.body, { childList: true, subtree: true });
-    removeTaskUi();
+    const extraLinksObserver = new MutationObserver(ensureExtraLinks);
+    extraLinksObserver.observe(document.body, { childList: true, subtree: true });
+    ensureExtraLinks();
 
     for (const id of ["sdf-saved-accounts", "sdf-notas"]) {
       if (document.getElementById(id)) continue;
@@ -77,7 +60,7 @@ export function SdfApp() {
       document.body.appendChild(extras);
     }
 
-    return () => taskUiObserver.disconnect();
+    return () => extraLinksObserver.disconnect();
   }, [isStandaloneRoute]);
 
   if (isStandaloneRoute) return null;
