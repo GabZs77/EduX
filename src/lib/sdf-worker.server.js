@@ -633,11 +633,31 @@ async function handleCaptchaVerify(request) {
 // FUNÇÕES DE API (SED/EDUSP)
 // =======================================================
 async function fetchTurmas(cdUsuarioCurto, token) {
-  const { resp, data } = await sedGet(
+  const [turmasResult, disciplinasResult] = await Promise.all([
+    sedGet(
     `apihubintegracoes/api/v2/Turma/ListarTurmasPorAluno?codigoAluno=${encodeURIComponent(cdUsuarioCurto)}`,
     { subKey: SUBSCRIPTION_KEYS.hub, token },
-  );
-  return { resp, data, rooms: unwrapSedList(data).map(normalizeRoom) };
+    ),
+    // Esta API é a usada pela Sala do Futuro para obter a turma junto com
+    // CodigoTurma/NumeroClasse/DescricaoTurma. Ela também funciona quando
+    // ListarTurmasPorAluno retorna apenas um resumo.
+    sedGet(
+      `apihubintegracoes/api/v2/Disciplina/ListarDisciplinaPorAluno?codigoAluno=${encodeURIComponent(cdUsuarioCurto)}`,
+      { subKey: SUBSCRIPTION_KEYS.login, token },
+    ),
+  ]);
+  const merged = [...unwrapSedList(turmasResult.data), ...unwrapSedList(disciplinasResult.data)];
+  const unique = new Map();
+  for (const item of merged) {
+    const room = normalizeRoom(item);
+    const key = String(room.id ?? room.numeroClasse ?? room.name).trim();
+    if (key && !unique.has(key)) unique.set(key, room);
+  }
+  return {
+    resp: turmasResult.resp.ok ? turmasResult.resp : disciplinasResult.resp,
+    data: turmasResult.resp.ok ? turmasResult.data : disciplinasResult.data,
+    rooms: [...unique.values()],
+  };
 }
 
 async function fetchTasksForTargets(token2, targets, options = {}) {
@@ -737,6 +757,9 @@ async function fetchTasks(token2, rooms, username) {
   for (const room of rooms) {
     if (!room.name) continue;
     addUnique(baseTargets, room.name);
+    addUnique(baseTargets, room.id);
+    addUnique(baseTargets, room.numeroClasse);
+    addUnique(baseTargets, room.identificador);
   }
   if (username) {
     const roomNames = (roomResult.data?.rooms || []).map((room) => room?.name).filter(Boolean);
@@ -750,8 +773,10 @@ async function fetchTasks(token2, rooms, username) {
   const rawTasks = [];
 
   const queryAttempts = [
-    { statuses: false, filterExpired: true, expiredOnly: false },
+    // O Sala do Futuro usa draft para respostas ainda não iniciadas.
     { statuses: ["draft"], filterExpired: true, expiredOnly: false },
+    { statuses: ["draft", "pending"], filterExpired: true, expiredOnly: false },
+    { statuses: false, filterExpired: true, expiredOnly: false },
     { statuses: ["draft"], filterExpired: false, expiredOnly: true },
   ];
   for (const options of queryAttempts) {
