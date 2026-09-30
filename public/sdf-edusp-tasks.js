@@ -127,12 +127,12 @@
     p.set("is_exam", "false");
     p.set("with_answer", "true");
     p.set("is_essay", "false");
-    targets.forEach(function (t) { p.append("publication_target", t); });
-    if (!(opts && opts.ignoreStatuses)) {
-      // Busca rascunhos E tarefas não iniciadas (pending); sem isso as
-      // pendências novas nunca aparecem e o contador fica em 0.
+    if (!(opts && opts.noTargets)) {
+      targets.forEach(function (t) { p.append("publication_target", t); });
+    }
+    if (!(opts && (opts.noStatuses || opts.ignoreStatuses))) {
+      // Mesmo filtro da plataforma oficial: rascunhos = tarefas a fazer.
       p.append("answer_statuses", "draft");
-      p.append("answer_statuses", "pending");
     }
     p.set("with_apply_moment", "true");
     var resp = await originalFetch(EDUSP + "/tms/task/todo?" + p.toString(), { headers: eduspHeaders(apiKey) });
@@ -143,6 +143,7 @@
     if (data && Array.isArray(data.data)) return data.data;
     return [];
   }
+
 
   function normalize(raw, roomTopics) {
     var answer = raw.answer_status == null ? null : String(raw.answer_status).toLowerCase();
@@ -161,16 +162,31 @@
 
   async function loadTasks() {
     var session = readSession();
-    if (!session) return null;
+    if (!session) return { tasks: [], rooms: [], erro: "sem sess\u00e3o salva no navegador" };
     var creds = await resolveCredentials(session);
-    if (!creds) return null;
-    var rooms = await fetchRooms(creds.apiKey);
+    if (!creds) return { tasks: [], rooms: [], erro: "token do EduSP indispon\u00edvel (troca de token falhou)" };
+    var rooms = [];
+    try {
+      rooms = await fetchRooms(creds.apiKey);
+    } catch (e) {
+      return { tasks: [], rooms: [], erro: "room/user falhou: " + (e && e.message ? e.message : e) };
+    }
     var targets = buildTargets(rooms, creds.nick);
-    if (!targets.length) return { tasks: [], targets: targets, rooms: rooms };
-    var raws = await fetchTodo(creds.apiKey, targets);
-    if (!raws.length) {
-      // Última tentativa: sem filtro de status, exatamente como a plataforma oficial.
-      raws = await fetchTodo(creds.apiKey, targets, { ignoreStatuses: true });
+    var raws = [];
+    var erro = "";
+    try {
+      raws = await fetchTodo(creds.apiKey, targets);
+      if (!raws.length) raws = await fetchTodo(creds.apiKey, targets, { ignoreStatuses: true });
+      if (!raws.length) raws = await fetchTodo(creds.apiKey, targets, { noStatuses: true });
+      if (!raws.length) raws = await fetchTodo(creds.apiKey, targets, { noStatuses: true, noTargets: true });
+    } catch (e1) {
+      erro = "tms/task/todo falhou: " + (e1 && e1.message ? e1.message : e1);
+      try {
+        raws = await fetchTodo(creds.apiKey, targets, { noStatuses: true });
+        erro = "";
+      } catch (e2) {
+        erro = "tms/task/todo falhou: " + (e2 && e2.message ? e2.message : e2);
+      }
     }
     var topics = {};
     rooms.forEach(function (r) { if (r && r.name) topics[r.name] = r.topic || r.name; });
@@ -182,8 +198,9 @@
       })
       .map(function (t) { return normalize(t, topics); });
     tasks.sort(function (a, b) { return (Date.parse(a.due || "") || 0) - (Date.parse(b.due || "") || 0); });
-    return { tasks: tasks, targets: targets, rooms: rooms };
+    return { tasks: tasks, targets: targets, rooms: rooms, erro: erro };
   }
+
 
   function getTasks() {
     var session = readSession();
@@ -246,6 +263,23 @@
     h1.insertAdjacentElement("afterend", p);
   }
 
+  function showDebugLine(text) {
+    var h1 = document.querySelector(".page-heading h1") || document.querySelector("h1");
+    if (!h1) return;
+    var existing = document.getElementById("sdf-task-debug");
+    if (existing) { existing.textContent = text; return; }
+    var p = document.createElement("p");
+    p.id = "sdf-task-debug";
+    p.textContent = text;
+    p.style.cssText = "margin:2px 0 0;font-size:.8rem;opacity:.9;color:#ffb84d;";
+    h1.insertAdjacentElement("afterend", p);
+  }
+
+  function hideDebugLine() {
+    var existing = document.getElementById("sdf-task-debug");
+    if (existing && existing.parentNode) existing.parentNode.removeChild(existing);
+  }
+
   // O painel pode renderizar depois da resposta chegar; observa o DOM.
   var observer = new MutationObserver(function () {
     if (!lastTurmaTexto || document.getElementById("sdf-turma-line")) return;
@@ -278,7 +312,14 @@
       data.tarefas = merged;
       data.pendencias = merged.filter(function (t) { return t.status === "pending"; }).length;
       data.targets = browser.targets;
-      data.tarefasFonte = "navegador";
+      data.tarefasErro = browser.erro || "";
+      data.tarefasFonte = browser.erro ? "erro" : "navegador";
+      if (browser.erro) {
+        console.warn("[EduX] Diagn\u00f3stico das tarefas:", browser.erro);
+        showDebugLine(browser.erro);
+      } else {
+        hideDebugLine();
+      }
       var turmaTexto = buildTurmaLabel(data.turmas, browser.rooms);
       if (turmaTexto) showTurmaLine(turmaTexto);
       var headers = new Headers(resp.headers);
