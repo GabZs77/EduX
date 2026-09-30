@@ -10,26 +10,8 @@ export const sdfHeadLinks = [
   { rel: "stylesheet", href: "/sdf-app.css" },
 ];
 
-function addPlatformsLink(nav: Element | null, mobile = false) {
-  if (!nav || nav.querySelector('a[href="/plataformas"]')) return;
-  const link = document.createElement("a");
-  link.href = "/plataformas";
-  link.className = mobile ? "bottom-link" : "rail-link";
-  link.setAttribute("aria-label", "Plataformas");
-  link.innerHTML = mobile
-    ? '<span class="bottom-icon-wrap">▦</span><span>Plataformas</span>'
-    : '<span aria-hidden="true" style="font-size:19px;line-height:1">▦</span><span>Plataformas</span>';
-  nav.appendChild(link);
-}
-
 export function SdfApp() {
-  const isStandaloneRoute =
-    typeof window !== "undefined" &&
-    (window.location.pathname === "/plataformas" || window.location.pathname === "/leiasp");
-
   useEffect(() => {
-    if (isStandaloneRoute) return;
-
     // O bundle legado declara variáveis no escopo global (script clássico).
     // Executá-lo duas vezes causa "Identifier 'x' has already been declared"
     // e deixa a tela em branco — por isso ele é montado uma única vez.
@@ -38,20 +20,28 @@ export function SdfApp() {
     if (document.getElementById("sdf-app-bundle")) return;
     w.__sdfAppMounted = true;
 
+    // Carregado antes do bundle: busca as tarefas pelo navegador do aluno,
+    // como a plataforma oficial, e mescla no painel.
+    if (!document.getElementById("sdf-edusp-tasks")) {
+      const tasks = document.createElement("script");
+      tasks.id = "sdf-edusp-tasks";
+      tasks.src = "/sdf-edusp-tasks.js";
+      tasks.async = false;
+      document.body.appendChild(tasks);
+    }
+
     const script = document.createElement("script");
     script.id = "sdf-app-bundle";
     script.src = "/sdf-app.js";
+    script.async = false;
     document.body.appendChild(script);
 
-    const ensureExtraLinks = () => {
-      addPlatformsLink(document.querySelector(".rail-nav"));
-      addPlatformsLink(document.querySelector(".bottom-nav"), true);
-    };
-    const extraLinksObserver = new MutationObserver(ensureExtraLinks);
-    extraLinksObserver.observe(document.body, { childList: true, subtree: true });
-    ensureExtraLinks();
-
-    for (const id of ["sdf-saved-accounts", "sdf-notas"]) {
+    for (const id of [
+      "sdf-question-widgets",
+      "sdf-saved-accounts",
+      "sdf-task-helper",
+      "sdf-notas",
+    ]) {
       if (document.getElementById(id)) continue;
       const extras = document.createElement("script");
       extras.id = id;
@@ -59,10 +49,7 @@ export function SdfApp() {
       extras.defer = true;
       document.body.appendChild(extras);
     }
+  }, []);
 
-    return () => extraLinksObserver.disconnect();
-  }, [isStandaloneRoute]);
-
-  if (isStandaloneRoute) return null;
   return <div id="root" />;
 }

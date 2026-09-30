@@ -7,47 +7,11 @@ const SUBSCRIPTION_KEYS = {
 
 const EXTRA_TARGETS = ["1052", "1820", "764"];
 const EDUSP_BASE = "https://edusp-api.ip.tv";
+const TASKITOS_BASE = "https://taskitos.cupiditys.lol";
 const SED_BASE = "https://sedintegracoes.educacao.sp.gov.br";
-const LEIASP_INTEGRATION_URL = `${SED_BASE}/saladofuturobffapi/integracoes/Token?plataforma=LeiaSP+`;
-const LEIASP_APIM_KEY = "d701a2043aa24d7ebb37e9adf60d043b";
-const ELEFANTE_OAUTH_BASE =
-  "https://prod-apiaccounts.elefanteletrado.com.br/api/oauth/seducsp/token";
-const ELEFANTE_STUDENT_API = "https://prod-apistudent.elefanteletrado.com.br";
-const ELEFANTE_CDN_BASE = "https://prod-us.elefanteletrado.com.br/cdn";
 const WORKER_BUILD = "sdf-flash-v23-20260911-direct-task-completion";
 
 const GROQ_URL = "https://api.groq.com/openai/v1/chat/completions";
-
-function getGroqApiKey(env) {
-  // A chave fica somente no ambiente do deploy; nunca use uma chave hardcoded no bundle.
-  return String(env?.GROQ_API_KEY || globalThis.GROQ_API_KEY || "").trim();
-}
-function compactGroqMessages(messages, maxChars = 22000) {
-  const normalized = Array.isArray(messages)
-    ? messages.map((message) => ({
-        role: message?.role === "assistant" ? "assistant" : "user",
-        content: typeof message?.content === "string" ? message.content : message?.content,
-      }))
-    : [];
-  let remaining = maxChars;
-  return normalized
-    .slice(-12)
-    .reverse()
-    .map((message) => {
-      if (typeof message.content !== "string") return message;
-      const content = message.content;
-      const take = Math.max(0, Math.min(content.length, remaining));
-      remaining -= take;
-      if (take >= content.length) return message;
-      const head = content.slice(0, Math.ceil(take * 0.68));
-      const tail = content.slice(-Math.floor(take * 0.32));
-      return {
-        ...message,
-        content: `${head}\n\n[Conteúdo intermediário reduzido para manter a resposta disponível.]\n\n${tail}`,
-      };
-    })
-    .reverse();
-}
 
 // Notificações: sem KV/D1/R2. O Worker mantém a lista no runtime atual.
 // O frontend também guarda um cache no localStorage para sobreviver a recarregamentos.
@@ -58,8 +22,7 @@ let NOTIFICATIONS_DB = [];
 const UPSTREAM_HEADERS = {
   Accept: "application/json",
   "Accept-Language": "en-US,en;q=0.9",
-  "User-Agent":
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+  "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
   Origin: "https://saladofuturo.educacao.sp.gov.br",
   Referer: "https://saladofuturo.educacao.sp.gov.br/",
 };
@@ -71,8 +34,7 @@ function corsHeaders() {
   return {
     "Access-Control-Allow-Origin": "*",
     "Access-Control-Allow-Methods": "GET,POST,PUT,DELETE,OPTIONS",
-    "Access-Control-Allow-Headers":
-      "Content-Type, X-Token, X-Token2, X-Api-Key, X-Cd-Usuario, X-Task-User, X-Usuario, X-Captcha-Token, X-Captcha-Session, X-Captcha-Cookie, X-Admin-User",
+    "Access-Control-Allow-Headers": "Content-Type, X-Token, X-Token2, X-Api-Key, X-Cd-Usuario, X-Task-User, X-Usuario, X-Captcha-Token, X-Captcha-Session, X-Captcha-Cookie, X-Admin-User",
   };
 }
 
@@ -83,14 +45,13 @@ function getEduApiKey(request) {
   return key;
 }
 
-function jsonResponse(data, status = 200, extraHeaders = {}) {
+function jsonResponse(data, status = 200) {
   return new Response(JSON.stringify(data), {
     status,
     headers: {
       "Content-Type": "application/json; charset=utf-8",
       "Cache-Control": "no-store",
       "X-Worker-Build": WORKER_BUILD,
-      ...extraHeaders,
       ...corsHeaders(),
     },
   });
@@ -98,20 +59,7 @@ function jsonResponse(data, status = 200, extraHeaders = {}) {
 
 async function readJson(resp) {
   const text = await resp.text();
-  try {
-    return JSON.parse(text);
-  } catch {
-    return { raw: text };
-  }
-}
-
-function extractCookieValue(setCookieHeader, name) {
-  const match = String(setCookieHeader || "").match(new RegExp(`${name}=([^;]+)`));
-  return match?.[1] || "";
-}
-
-function setCookieHeader(name, value, maxAge = 3600) {
-  return `${name}=${value}; Path=/; Max-Age=${maxAge}; HttpOnly; Secure; SameSite=Lax`;
+  try { return JSON.parse(text); } catch { return { raw: text }; }
 }
 
 function upstreamErrorMessage(data, status) {
@@ -146,11 +94,7 @@ async function sedGet(pathAndQuery, { subKey, token } = {}) {
       };
       if (useToken) headers.Authorization = `Bearer ${token}`;
       let resp;
-      try {
-        resp = await fetch(url, { headers });
-      } catch {
-        continue;
-      }
+      try { resp = await fetch(url, { headers }); } catch { continue; }
       const data = await readJson(resp);
       last = { resp, data, url };
       if (resp.ok) return last;
@@ -163,102 +107,11 @@ function currentAnoLetivo() {
   return new Date().getFullYear();
 }
 
-function numberValue(value, seen = new Set()) {
+function numberValue(value) {
   if (typeof value === "number" && Number.isFinite(value)) return value;
   if (typeof value === "string" && value.trim()) {
-    const cleaned = value
-      .trim()
-      .replace(/%$/, "")
-      .replace(/\.(?=\d{3}(?:\D|$))/g, "")
-      .replace(",", ".");
-    const n = Number(cleaned);
+    const n = Number(value.replace(",", "."));
     return Number.isFinite(n) ? n : null;
-  }
-  if (value && typeof value === "object" && !seen.has(value)) {
-    seen.add(value);
-    for (const key of [
-      "value",
-      "valor",
-      "nota",
-      "notaAtribuida",
-      "notaObtida",
-      "notaFinal",
-      "valorNota",
-      "score",
-      "grade",
-    ]) {
-      const nested = numberValue(value[key], seen);
-      if (nested !== null) return nested;
-    }
-  }
-  return null;
-}
-function firstValue(row, keys) {
-  if (!row || typeof row !== "object") return null;
-  const wanted = new Set(
-    keys.map((key) =>
-      String(key)
-        .toLowerCase()
-        .replace(/[^a-z0-9]/g, ""),
-    ),
-  );
-  for (const [key, value] of Object.entries(row)) {
-    if (
-      wanted.has(key.toLowerCase().replace(/[^a-z0-9]/g, "")) &&
-      value !== null &&
-      value !== undefined &&
-      value !== ""
-    )
-      return value;
-  }
-  return null;
-}
-function validNoteValue(value) {
-  const number = numberValue(value);
-  return number !== null && number >= 0 && number <= 10 ? number : null;
-}
-function firstNoteValue(row, keys) {
-  if (!row || typeof row !== "object") return null;
-  const wanted = new Set(
-    keys.map((key) =>
-      String(key)
-        .toLowerCase()
-        .replace(/[^a-z0-9]/g, ""),
-    ),
-  );
-  for (const [key, value] of Object.entries(row)) {
-    if (!wanted.has(key.toLowerCase().replace(/[^a-z0-9]/g, ""))) continue;
-    const number = validNoteValue(value);
-    if (number !== null) return number;
-  }
-  return null;
-}
-function findNoteValue(value, seen = new Set()) {
-  if (!value || typeof value !== "object" || seen.has(value)) return null;
-  seen.add(value);
-  const preferred = [
-    "notaAtribuida",
-    "nota",
-    "valorNota",
-    "notaAluno",
-    "notaLancada",
-    "notaObtida",
-    "notaAvaliacao",
-    "notaFinal",
-    "mediaFinal",
-    "score",
-    "grade",
-  ];
-  for (const [key, nested] of Object.entries(value)) {
-    const normalized = key.toLowerCase().replace(/[^a-z0-9]/g, "");
-    if (preferred.includes(normalized) || /nota|score|grade/.test(normalized)) {
-      const number = validNoteValue(nested);
-      if (number !== null) return number;
-    }
-  }
-  for (const nested of Object.values(value)) {
-    const number = findNoteValue(nested, seen);
-    if (number !== null) return number;
   }
   return null;
 }
@@ -272,15 +125,12 @@ function addUnique(array, value) {
 function unwrapSedList(data) {
   if (!data) return [];
   if (Array.isArray(data)) return data;
-  for (const key of ["data", "items", "result", "results", "avaliacoes", "avaliations", "value"]) {
-    const nested = data[key];
-    if (Array.isArray(nested)) return nested;
-    if (nested && typeof nested === "object") {
-      const rows = unwrapSedList(nested);
-      if (rows.length) return rows;
-    }
-  }
-  return typeof data === "object" ? [data] : [];
+  if (Array.isArray(data.data)) return data.data;
+  if (Array.isArray(data.items)) return data.items;
+  if (Array.isArray(data.result)) return data.result;
+  if (Array.isArray(data.results)) return data.results;
+  if (data.data && typeof data.data === "object") return [data.data];
+  return [];
 }
 
 function toTitleCase(str) {
@@ -306,11 +156,8 @@ function roomNameFromDescription(description) {
 }
 
 function normalizeRoom(room) {
-  const descricao =
-    room?.DescricaoTurma ?? room?.descricaoTurma ?? room?.descricao ?? room?.description ?? "";
-  const name =
-    roomNameFromDescription(descricao) ||
-    String(room?.NomeTurma ?? room?.name ?? room?.topic ?? "").trim();
+  const descricao = room?.DescricaoTurma ?? room?.descricaoTurma ?? room?.descricao ?? room?.description ?? "";
+  const name = roomNameFromDescription(descricao) || String(room?.NomeTurma ?? room?.name ?? room?.topic ?? "").trim();
   return {
     id: room?.CodigoTurma ?? room?.codigoTurma ?? room?.id ?? null,
     numeroClasse: room?.NumeroClasse ?? room?.numeroClasse ?? null,
@@ -326,8 +173,7 @@ function normalizeRoom(room) {
 function extractTasks(data) {
   if (Array.isArray(data)) return data;
   if (!data || typeof data !== "object") return [];
-  for (const key of ["tasks", "items", "data", "results", "todo"])
-    if (Array.isArray(data[key])) return data[key];
+  for (const key of ["tasks", "items", "data", "results", "todo"]) if (Array.isArray(data[key])) return data[key];
   for (const key of ["data", "result", "response", "payload"]) {
     if (data[key] && typeof data[key] === "object") {
       const nested = extractTasks(data[key]);
@@ -338,17 +184,7 @@ function extractTasks(data) {
 }
 
 function taskRoomTarget(task, fallback = "") {
-  const candidates = [
-    task?.room_name,
-    task?.roomName,
-    task?.target_value,
-    task?.targetValue,
-    task?.publication_target,
-    task?.publicationTarget,
-    task?.room,
-    task?.turma,
-    task?.classroom,
-  ];
+  const candidates = [task?.room_name, task?.roomName, task?.target_value, task?.targetValue, task?.publication_target, task?.publicationTarget, task?.room, task?.turma, task?.classroom];
   for (const value of candidates) {
     if (typeof value === "string" || typeof value === "number") {
       const text = String(value).trim();
@@ -362,13 +198,7 @@ function taskRoomTarget(task, fallback = "") {
   return String(fallback || "").trim();
 }
 function normalizeTask(task, roomName = "") {
-  const due =
-    task?.apply_moment ??
-    task?.applyMoment ??
-    task?.due_date ??
-    task?.dueDate ??
-    task?.deadline ??
-    null;
+  const due = task?.apply_moment ?? task?.applyMoment ?? task?.due_date ?? task?.dueDate ?? task?.deadline ?? null;
   const rawStatus = String(task?.answer_status ?? task?.status ?? "pending").toLowerCase();
   // A API oficial usa answer_status=pending mesmo quando apply_moment já passou.
   // A data não pode transformar uma tarefa não respondida em expired, senão
@@ -377,22 +207,11 @@ function normalizeTask(task, roomName = "") {
   const answered = ["submitted", "completed", "done", "finished"].includes(status);
   if (!answered && !["expired", "overdue"].includes(status)) status = "pending";
   if (["overdue"].includes(status)) status = "expired";
-  const publicationTarget = taskRoomTarget(task, "");
-  const identifiedRoom = String(roomName || publicationTarget || "").trim();
   return {
     id: task?.id ?? task?.task_id ?? task?.taskId ?? null,
     title: task?.title ?? task?.name ?? task?.titulo ?? task?.description ?? "Tarefa",
-    subject:
-      task?.discipline_name ??
-      task?.disciplineName ??
-      task?.subject_name ??
-      task?.subject ??
-      task?.materia ??
-      "",
-    room: identifiedRoom,
-    turma: identifiedRoom,
-    turmaIdentificada: Boolean(identifiedRoom),
-    publicationTarget,
+    subject: task?.discipline_name ?? task?.disciplineName ?? task?.subject_name ?? task?.subject ?? task?.materia ?? "",
+    room: taskRoomTarget(task, roomName),
     status,
     answerStatus: rawStatus,
     due,
@@ -400,34 +219,20 @@ function normalizeTask(task, roomName = "") {
   };
 }
 
+
 // =======================================================
 // PROXY DE PDF DAS APOSTILAS
 // =======================================================
 async function handlePdfProxy(request, url) {
   const target = url.searchParams.get("url") || "";
-  if (!target)
-    return new Response("Parâmetro url ausente", { status: 400, headers: corsHeaders() });
+  if (!target) return new Response("Parâmetro url ausente", { status: 400, headers: corsHeaders() });
   let targetUrl;
-  try {
-    targetUrl = new URL(target);
-  } catch {
-    return new Response("URL inválida", { status: 400, headers: corsHeaders() });
-  }
+  try { targetUrl = new URL(target); } catch { return new Response("URL inválida", { status: 400, headers: corsHeaders() }); }
   if (targetUrl.protocol !== "https:" || targetUrl.hostname !== "raw.githubusercontent.com") {
     return new Response("Domínio não permitido", { status: 403, headers: corsHeaders() });
   }
-  const resp = await fetch(targetUrl.toString(), {
-    headers: { Accept: "application/pdf,application/octet-stream;q=0.9,*/*;q=0.8" },
-    cf: { cacheTtl: 86400, cacheEverything: true },
-  });
-  if (!resp.ok)
-    return new Response(await resp.text(), {
-      status: resp.status,
-      headers: {
-        ...corsHeaders(),
-        "Content-Type": resp.headers.get("content-type") || "text/plain",
-      },
-    });
+  const resp = await fetch(targetUrl.toString(), { headers: { Accept: "application/pdf,application/octet-stream;q=0.9,*/*;q=0.8" }, cf: { cacheTtl: 86400, cacheEverything: true } });
+  if (!resp.ok) return new Response(await resp.text(), { status: resp.status, headers: { ...corsHeaders(), "Content-Type": resp.headers.get("content-type") || "text/plain" } });
   const headers = new Headers(corsHeaders());
   headers.set("Content-Type", resp.headers.get("content-type") || "application/pdf");
   headers.set("Cache-Control", "public, max-age=86400");
@@ -439,9 +244,7 @@ async function handlePdfProxy(request, url) {
 // CAPTCHA SED / EduSP
 // =======================================================
 function cookiePair(value) {
-  return String(value || "")
-    .split(";", 1)[0]
-    .trim();
+  return String(value || "").split(";", 1)[0].trim();
 }
 
 // Reúne TODOS os cookies devolvidos pelo upstream (o desafio pode depender de
@@ -467,9 +270,7 @@ function collectCookies(resp) {
 function randomSessionKey() {
   const bytes = new Uint8Array(16);
   crypto.getRandomValues(bytes);
-  return Array.from(bytes)
-    .map((b) => b.toString(16).padStart(2, "0"))
-    .join("");
+  return Array.from(bytes).map((b) => b.toString(16).padStart(2, "0")).join("");
 }
 
 // O cliente oficial envia apenas x-session-key (+ content-type) nas rotas de
@@ -497,9 +298,7 @@ async function handleCaptchaChallenge(request) {
   } catch {}
   // A sessão do CAPTCHA é criada pelo cliente (32 hex) e precisa ser a MESMA no
   // challenge e no verify — é isso que fazia a primeira tentativa falhar.
-  const sessionKey =
-    String(body?.sessionKey || request.headers.get("X-Captcha-Session") || "").trim() ||
-    randomSessionKey();
+  const sessionKey = String(body?.sessionKey || request.headers.get("X-Captcha-Session") || "").trim() || randomSessionKey();
   delete body.sessionKey;
   let last = null;
   try {
@@ -511,61 +310,32 @@ async function handleCaptchaChallenge(request) {
     const data = await readJson(resp);
     last = { resp, data };
     if (resp.ok) {
-      return jsonResponse(
-        {
-          ...data,
-          challengeId:
-            data?.challengeId ??
-            data?.challenge_id ??
-            data?.id ??
-            data?.data?.challenge_id ??
-            data?.data?.id,
-          image:
-            data?.challenge?.image ??
-            data?.image ??
-            data?.data?.image ??
-            data?.data?.challenge?.image,
-          sessionKey,
-          captchaCookie:
-            collectCookies(resp) || cookiePair(data?.captchaCookie || data?.cookie || ""),
-        },
-        resp.status,
-      );
+      return jsonResponse({
+        ...data,
+        challengeId: data?.challengeId ?? data?.challenge_id ?? data?.id ?? data?.data?.challenge_id ?? data?.data?.id,
+        image: data?.challenge?.image ?? data?.image ?? data?.data?.image ?? data?.data?.challenge?.image,
+        sessionKey,
+        captchaCookie: collectCookies(resp) || cookiePair(data?.captchaCookie || data?.cookie || ""),
+      }, resp.status);
     }
   } catch {}
-  return jsonResponse(
-    { erro: "Não foi possível carregar o CAPTCHA.", detalhe: last?.data || null },
-    last?.resp?.status || 502,
-  );
+  return jsonResponse({ erro: "Não foi possível carregar o CAPTCHA.", detalhe: last?.data || null }, last?.resp?.status || 502);
 }
 
 async function handleCaptchaVerify(request) {
   const token2 = getEduApiKey(request);
   if (!token2) return jsonResponse({ erro: "Cabeçalho X-Token2 ausente" }, 400);
   let body;
-  try {
-    body = await request.json();
-  } catch {
-    return jsonResponse({ erro: "Corpo do CAPTCHA inválido" }, 400);
-  }
+  try { body = await request.json(); } catch { return jsonResponse({ erro: "Corpo do CAPTCHA inválido" }, 400); }
   const payload = body?.payload || {};
-  if (!payload.challengeId || !payload.answer)
-    return jsonResponse({ erro: "challengeId e answer são obrigatórios" }, 400);
-  const sessionKey = String(
-    body?.sessionKey || request.headers.get("X-Captcha-Session") || "",
-  ).trim();
-  const captchaCookie = String(
-    body?.captchaCookie || request.headers.get("X-Captcha-Cookie") || "",
-  ).trim();
+  if (!payload.challengeId || !payload.answer) return jsonResponse({ erro: "challengeId e answer são obrigatórios" }, 400);
+  const sessionKey = String(body?.sessionKey || request.headers.get("X-Captcha-Session") || "").trim();
+  const captchaCookie = String(body?.captchaCookie || request.headers.get("X-Captcha-Cookie") || "").trim();
   const answer = String(payload.answer).trim();
 
   // O corpo é exatamente o do cliente oficial (sem sessionKey); a sessão vai só
   // no cabeçalho x-session-key. Se faltar sessão, tentamos apenas pelos cookies.
-  const payloadBody = {
-    type: "image",
-    realm: "edusp",
-    payload: { challengeId: payload.challengeId, answer },
-  };
+  const payloadBody = { type: "image", realm: "edusp", payload: { challengeId: payload.challengeId, answer } };
   const attempts = sessionKey ? [sessionKey, ""] : [""];
   let resp = null;
   let data = null;
@@ -578,266 +348,111 @@ async function handleCaptchaVerify(request) {
         redirect: "manual",
       });
     } catch (error) {
-      return jsonResponse(
-        {
-          erro: "Não foi possível conectar ao serviço de CAPTCHA. Verifique a conexão e gere um novo desafio.",
-          detalhe: String(error?.message || error),
-          valid: false,
-        },
-        502,
-      );
+      return jsonResponse({ erro: "Não foi possível conectar ao serviço de CAPTCHA. Verifique a conexão e gere um novo desafio.", detalhe: String(error?.message || error), valid: false }, 502);
     }
     data = await readJson(resp);
     if (resp.ok) break;
     if (resp.status !== 401 && resp.status !== 400) break;
   }
 
-  const token =
-    data?.token ||
-    data?.captcha_token ||
-    data?.captchaToken ||
-    data?.data?.token ||
-    data?.data?.captcha_token ||
-    data?.data?.captchaToken ||
-    "";
-  if (resp.status >= 300 && resp.status < 400)
-    return jsonResponse(
-      {
-        erro: "O serviço de CAPTCHA redirecionou a validação. Gere um novo desafio.",
-        upstream_status: resp.status,
-        valid: false,
-      },
-      502,
-    );
-  if (!resp.ok)
-    return jsonResponse(
-      {
-        erro:
-          resp.status === 401
-            ? "A plataforma recusou a sessão do CAPTCHA. Gere um novo desafio e tente novamente."
-            : "O código do CAPTCHA não foi aceito.",
-        upstream_status: resp.status,
-        upstream: data,
-        token: "",
-        valid: false,
-      },
-      resp.status,
-    );
-  return jsonResponse(
-    { ...data, token, valid: Boolean(token || data?.valid), sessionKey },
-    resp.status,
-  );
+  const token = data?.token || data?.captcha_token || data?.captchaToken || data?.data?.token || data?.data?.captcha_token || data?.data?.captchaToken || "";
+  if (resp.status >= 300 && resp.status < 400) return jsonResponse({ erro: "O serviço de CAPTCHA redirecionou a validação. Gere um novo desafio.", upstream_status: resp.status, valid: false }, 502);
+  if (!resp.ok) return jsonResponse({ erro: resp.status === 401 ? "A plataforma recusou a sessão do CAPTCHA. Gere um novo desafio e tente novamente." : "O código do CAPTCHA não foi aceito.", upstream_status: resp.status, upstream: data, token: "", valid: false }, resp.status);
+  return jsonResponse({ ...data, token, valid: Boolean(token || data?.valid), sessionKey }, resp.status);
 }
+
 
 // =======================================================
 // FUNÇÕES DE API (SED/EDUSP)
 // =======================================================
 async function fetchTurmas(cdUsuarioCurto, token) {
-  const [turmasResult, disciplinasResult] = await Promise.all([
-    sedGet(
+  const { resp, data } = await sedGet(
     `apihubintegracoes/api/v2/Turma/ListarTurmasPorAluno?codigoAluno=${encodeURIComponent(cdUsuarioCurto)}`,
     { subKey: SUBSCRIPTION_KEYS.hub, token },
-    ),
-    // Esta API é a usada pela Sala do Futuro para obter a turma junto com
-    // CodigoTurma/NumeroClasse/DescricaoTurma. Ela também funciona quando
-    // ListarTurmasPorAluno retorna apenas um resumo.
-    sedGet(
-      `apihubintegracoes/api/v2/Disciplina/ListarDisciplinaPorAluno?codigoAluno=${encodeURIComponent(cdUsuarioCurto)}`,
-      { subKey: SUBSCRIPTION_KEYS.login, token },
-    ),
-  ]);
-  const merged = [...unwrapSedList(turmasResult.data), ...unwrapSedList(disciplinasResult.data)];
-  const unique = new Map();
-  for (const item of merged) {
-    const room = normalizeRoom(item);
-    const key = String(room.id ?? room.numeroClasse ?? room.name).trim();
-    if (key && !unique.has(key)) unique.set(key, room);
-  }
-  return {
-    resp: turmasResult.resp.ok ? turmasResult.resp : disciplinasResult.resp,
-    data: turmasResult.resp.ok ? turmasResult.data : disciplinasResult.data,
-    rooms: [...unique.values()],
-  };
+  );
+  return { resp, data, rooms: unwrapSedList(data).map(normalizeRoom) };
 }
 
 async function fetchTasksForTargets(token2, targets, options = {}) {
   const params = new URLSearchParams();
   params.set("expired_only", options.expiredOnly ? "true" : "false");
-  params.set("limit", "100");
-  params.set("offset", "0");
+  params.set("limit", "100"); params.set("offset", "0");
   params.set("filter_expired", options.filterExpired === false ? "false" : "true");
-  params.set("is_exam", "false");
-  params.set("with_answer", "true");
+  params.set("is_exam", "false"); params.set("with_answer", "true");
   params.set("is_essay", "false");
   if (options.statuses !== false) {
-    for (const status of options.statuses || ["draft", "pending"])
-      params.append("answer_statuses", status);
+    for (const status of options.statuses || ["draft", "pending"]) params.append("answer_statuses", status);
   }
   params.set("with_apply_moment", "true");
   for (const target of targets || []) params.append("publication_target", target);
   const resp = await fetch(`${EDUSP_BASE}/tms/task/todo?${params.toString()}`, {
-    headers: {
-      ...UPSTREAM_HEADERS,
-      "content-type": "application/json",
-      "x-api-platform": "webclient",
-      "x-api-realm": "edusp",
-      "x-api-key": token2,
-    },
-  });
-  return { resp, data: await readJson(resp) };
-}
-
-async function fetchPendingAnswers(token2, targets, nick) {
-  const params = new URLSearchParams();
-  params.set("limit", "100");
-  params.set("offset", "0");
-  params.set("task_is_exam", "false");
-  params.set("task_is_essay", "false");
-  params.set("status", "pending");
-  params.set("order", "asc");
-  params.set("order_by", "task_id");
-  params.set("with_apply_moment", "true");
-  if (nick) params.set("nick", nick.endsWith("-sp") ? nick : `${nick}-sp`);
-  for (const target of targets || []) params.append("publication_target", target);
-  for (const field of [
-    "id", "status", "task_id", "publication_target", "created_at", "updated_at",
-    "answers", "duration", "delivered_at", "task.title", "task.description",
-    "task.publish_at", "task.expire_at", "task.publication_target",
-  ]) params.append("fields", field);
-  const resp = await fetch(`${EDUSP_BASE}/tms/answer?${params.toString()}`, {
-    headers: {
-      ...UPSTREAM_HEADERS,
-      "content-type": "application/json",
-      "x-api-platform": "webclient",
-      "x-api-realm": "edusp",
-      "x-api-key": token2,
-    },
+    headers: { ...UPSTREAM_HEADERS, "content-type": "application/json", "x-api-platform": "webclient", "x-api-realm": "edusp", "x-api-key": token2 },
   });
   return { resp, data: await readJson(resp) };
 }
 
 async function fetchEduspRoomTargets(token2) {
-  const targets = [];
-  let data = null;
-  let status = 0;
+  const roomNames = [];
+  const categoryIds = [];
   try {
     const resp = await fetch(`${EDUSP_BASE}/room/user?list_all=true&with_cards=true`, {
-      headers: {
-        ...UPSTREAM_HEADERS,
-        "content-type": "application/json",
-        "x-api-platform": "webclient",
-        "x-api-realm": "edusp",
-        "x-api-key": token2,
-      },
+      headers: { ...UPSTREAM_HEADERS, "content-type": "application/json", "x-api-platform": "webclient", "x-api-realm": "edusp", "x-api-key": token2 },
     });
-    status = resp.status;
-    data = await readJson(resp);
-    if (!resp.ok) return { targets, data, status };
+    if (!resp.ok) return { roomNames, categoryIds };
+    const data = await readJson(resp);
     const eduspRooms = Array.isArray(data?.rooms) ? data.rooms : [];
     for (const room of eduspRooms) {
-      addUnique(targets, room?.name);
+      addUnique(roomNames, room?.name);
       const categories = Array.isArray(room?.group_categories) ? room.group_categories : [];
-      for (const cat of categories) addUnique(targets, cat?.id);
+      for (const cat of categories) addUnique(categoryIds, cat?.id);
     }
   } catch {}
-  return { targets, data, status };
-}
-
-async function fetchSurveyTodoCount(token2, roomData, nick, filterExpired) {
-  const params = new URLSearchParams();
-  const rooms = Array.isArray(roomData?.rooms) ? roomData.rooms : [];
-  for (const room of rooms) {
-    const name = String(room?.name || "").trim();
-    if (name) {
-      params.append("publication_target", name);
-      if (nick) params.append("publication_target", `${name}:${nick}`);
-    }
-    for (const category of Array.isArray(room?.group_categories) ? room.group_categories : []) {
-      if (category?.id !== undefined && category?.id !== null) params.append("publication_target", String(category.id));
-    }
-  }
-  params.set("filter_expired", filterExpired ? "true" : "false");
-  params.set("with_answer", "true");
-  params.set("answer_statuses", "draft");
-  const resp = await fetch(`${EDUSP_BASE}/survey/todo/count?${params.toString()}`, {
-    headers: {
-      ...UPSTREAM_HEADERS,
-      "content-type": "application/json",
-      "x-api-platform": "webclient",
-      "x-api-realm": "edusp",
-      "x-api-key": token2,
-    },
-  });
-  const data = await readJson(resp);
-  return {
-    resp,
-    data,
-    count: Number(data?.count ?? data?.data?.count ?? data?.total ?? data?.data?.total ?? 0) || 0,
-  };
+  return { roomNames, categoryIds };
 }
 
 async function fetchTasks(token2, rooms, username) {
   // Mesma consulta que a plataforma original faz na aba "A Fazer":
-  // apenas os alvos reais do aluno, filtro draft e sem expiradas. A API inclui
-  // nesse filtro as tarefas ainda não iniciadas, cujo answer_status vem nulo.
+  // salas, salas personalizadas e categorias numéricas, nesta ordem. Categorias
+  // não aceitam o sufixo do aluno; enviá-lo nelas pode invalidar a consulta toda.
   const baseTargets = [];
-  const roomResult = await fetchEduspRoomTargets(token2);
-  for (const target of roomResult.targets) addUnique(baseTargets, target);
-  for (const room of rooms) {
-    if (!room.name) continue;
-    addUnique(baseTargets, room.name);
-    addUnique(baseTargets, room.id);
-    addUnique(baseTargets, room.numeroClasse);
-    addUnique(baseTargets, room.identificador);
+  const eduspTargets = await fetchEduspRoomTargets(token2);
+  const roomTargets = [...eduspTargets.roomNames];
+  // A lista SED usa nomes de exibição, não publication_target. Ela só serve de
+  // fallback caso o endpoint de salas do EduSP esteja temporariamente vazio.
+  if (!roomTargets.length) {
+    for (const room of rooms) {
+      const candidate = String(room?.identificador || room?.name || "").trim();
+      if (candidate) addUnique(roomTargets, candidate);
+    }
   }
+  for (const target of roomTargets) addUnique(baseTargets, target);
   if (username) {
-    const roomNames = (roomResult.data?.rooms || []).map((room) => room?.name).filter(Boolean);
-    for (const target of roomNames) addUnique(baseTargets, `${target}:${username}`);
-    for (const target of [...baseTargets]) addUnique(baseTargets, `${target}:${username}-sp`);
-    addUnique(baseTargets, `${username}-sp`);
+    const taskUser = String(username).trim().replace(/-sp$/i, "");
+    for (const target of roomTargets) addUnique(baseTargets, `${target}:${taskUser}-sp`);
   }
+  for (const categoryId of eduspTargets.categoryIds) addUnique(baseTargets, categoryId);
 
   let lastResp = null;
   let lastData = null;
   const rawTasks = [];
 
-  const queryAttempts = [
-    // O Sala do Futuro usa draft para respostas ainda não iniciadas.
-    { statuses: ["draft"], filterExpired: true, expiredOnly: false },
-    { statuses: ["draft", "pending"], filterExpired: true, expiredOnly: false },
-    { statuses: false, filterExpired: true, expiredOnly: false },
-    { statuses: ["draft"], filterExpired: false, expiredOnly: true },
-  ];
-  for (const options of queryAttempts) {
-    try {
-      const result = await fetchTasksForTargets(token2, baseTargets, options);
-      lastResp = result.resp;
-      lastData = result.data;
-      if (result.resp?.ok) rawTasks.push(...extractTasks(result.data));
-      if (rawTasks.length) break;
-    } catch {}
-  }
-  if (!rawTasks.length) {
-    try {
-      const answerResult = await fetchPendingAnswers(token2, baseTargets, username);
-      lastResp = answerResult.resp;
-      lastData = answerResult.data;
-      for (const answer of extractTasks(answerResult.data)) {
-        const nestedTask = answer?.task && typeof answer.task === "object" ? answer.task : {};
-        rawTasks.push({ ...nestedTask, ...answer, answer_status: answer?.status || "draft" });
-      }
-    } catch {}
-  }
+  try {
+    const result = await fetchTasksForTargets(token2, baseTargets, {
+      statuses: ["draft"],
+      filterExpired: true,
+      expiredOnly: false,
+    });
+    lastResp = result.resp; lastData = result.data;
+    if (result.resp?.ok) rawTasks.push(...extractTasks(result.data));
+  } catch {}
 
   const seen = new Set();
   const tasks = [];
   for (const raw of rawTasks) {
-    const id = String(
-      raw?.id ?? raw?.task_id ?? raw?.taskId ?? `${raw?.title}|${raw?.apply_moment ?? ""}`,
-    );
+    const id = String(raw?.id ?? raw?.task_id ?? raw?.taskId ?? `${raw?.title}|${raw?.apply_moment ?? ""}`);
     if (seen.has(id)) continue;
     seen.add(id);
-    const task = normalizeTask(raw, findRoomForTask(raw, rooms, roomResult.data));
+    const task = normalizeTask(raw, findRoomForTask(raw, rooms));
     // Somente tarefas pendentes: entregues e expiradas ficam de fora.
     if (task.status !== "pending") continue;
     const answered = raw?.answer_status ?? raw?.answerStatus ?? null;
@@ -845,32 +460,12 @@ async function fetchTasks(token2, rooms, username) {
     tasks.push(task);
   }
   tasks.sort((a, b) => (Date.parse(a.due || "") || 0) - (Date.parse(b.due || "") || 0));
-  return {
-    ok: lastResp ? Boolean(lastResp.ok) : true,
-    status: lastResp?.status ?? 200,
-    tasks,
-    targets: baseTargets,
-    raw: lastData,
-    roomData: roomResult.data,
-    roomTargetsStatus: roomResult.status,
-  };
+  return { ok: lastResp ? Boolean(lastResp.ok) : true, status: lastResp?.status ?? 200, tasks, targets: baseTargets, raw: lastData };
 }
 
-function findRoomForTask(task, rooms, eduspRoomData = null) {
-  const target = taskRoomTarget(task, "").toLowerCase();
-  for (const room of eduspRoomData?.rooms || []) {
-    const name = String(room?.name || "").trim();
-    if (!name) continue;
-    const values = [name, ...(room?.group_categories || []).map((category) => category?.id)];
-    if (values.some((value) => String(value || "").trim().toLowerCase() === target)) return name;
-  }
-  for (const room of rooms) {
-    const name = String(room?.name || "").trim();
-    if (!name) continue;
-    const normalizedName = name.toLowerCase();
-    if (target === normalizedName || target.startsWith(`${normalizedName}:`)) return name;
-    if (room.id !== null && target === String(room.id).toLowerCase()) return name;
-  }
+
+
+function findRoomForTask(task, rooms) {
   const text = JSON.stringify(task || "").toLowerCase();
   for (const room of rooms) {
     if (room.name && text.includes(room.name.toLowerCase())) return room.name;
@@ -906,60 +501,27 @@ async function fetchFrequenciaBimestre(cdUsuarioCurto, token, bimestre, anoLetiv
 }
 
 function extractFaltasBimestre(data) {
-  const exactKeys = [
-    "faltasBimestreAtual",
-    "FaltasBimestreAtual",
-    "totalFaltasBimestre",
-    "TotalFaltasBimestre",
-    "quantidadeFaltasBimestre",
-    "QuantidadeFaltasBimestre",
-    "totalFaltas",
-    "TotalFaltas",
-    "faltas",
-    "Faltas",
-  ];
+  const exactKeys = ["faltasBimestreAtual", "FaltasBimestreAtual", "totalFaltasBimestre", "TotalFaltasBimestre", "quantidadeFaltasBimestre", "QuantidadeFaltasBimestre", "totalFaltas", "TotalFaltas", "faltas", "Faltas"];
   const seen = new WeakSet();
   function walk(node) {
     if (!node || typeof node !== "object" || seen.has(node)) return null;
     seen.add(node);
-    if (Array.isArray(node)) {
-      for (const item of node) {
-        const found = walk(item);
-        if (found !== null) return found;
-      }
-      return null;
-    }
-    for (const key of exactKeys) {
-      if (Object.prototype.hasOwnProperty.call(node, key)) {
-        const n = numberValue(node[key]);
-        if (n !== null) return n;
-      }
-    }
-    for (const value of Object.values(node)) {
-      const found = walk(value);
-      if (found !== null) return found;
-    }
+    if (Array.isArray(node)) { for (const item of node) { const found = walk(item); if (found !== null) return found; } return null; }
+    for (const key of exactKeys) { if (Object.prototype.hasOwnProperty.call(node, key)) { const n = numberValue(node[key]); if (n !== null) return n; } }
+    for (const value of Object.values(node)) { const found = walk(value); if (found !== null) return found; }
     return null;
   }
   const explicit = walk(data);
   if (explicit !== null) return explicit;
-  let sum = 0;
-  let found = false;
+  let sum = 0; let found = false;
   const visited = new WeakSet();
   function sumExact(node) {
     if (!node || typeof node !== "object" || visited.has(node)) return;
     visited.add(node);
     if (Array.isArray(node)) return node.forEach(sumExact);
     for (const [key, value] of Object.entries(node)) {
-      if (/^faltas?$/i.test(key)) {
-        const n = numberValue(value);
-        if (n !== null) {
-          sum += n;
-          found = true;
-        }
-      } else if (value && typeof value === "object") {
-        sumExact(value);
-      }
+      if (/^faltas?$/i.test(key)) { const n = numberValue(value); if (n !== null) { sum += n; found = true; } } 
+      else if (value && typeof value === "object") { sumExact(value); }
     }
   }
   sumExact(data);
@@ -968,22 +530,13 @@ function extractFaltasBimestre(data) {
 
 async function fetchNotifications(cdUsuario) {
   const url = `${SED_BASE}/cmspwebservice/api/sala-do-futuro-alunos/consulta-notificacao-cmsp?userId=${encodeURIComponent(cdUsuario)}`;
-  const resp = await fetch(url, {
-    headers: { Accept: "application/json", "Ocp-Apim-Subscription-Key": SUBSCRIPTION_KEYS.boletim },
-  });
+  const resp = await fetch(url, { headers: { Accept: "application/json", "Ocp-Apim-Subscription-Key": SUBSCRIPTION_KEYS.boletim } });
   const data = await readJson(resp);
   let list = [];
   if (Array.isArray(data)) list = data;
   else if (Array.isArray(data?.notifications)) list = data.notifications;
   else if (Array.isArray(data?.data)) list = data.data;
-  const unread = list.filter(
-    (item) =>
-      item?.statusLeitura === false ||
-      item?.lido === false ||
-      item?.read === false ||
-      item?.isRead === false ||
-      item?.status === "UNREAD",
-  ).length;
+  const unread = list.filter(item => item?.statusLeitura === false || item?.lido === false || item?.read === false || item?.isRead === false || item?.status === "UNREAD").length;
   return { ok: resp.ok, data, total: list.length, unread };
 }
 
@@ -1039,21 +592,14 @@ async function fetchAgendaDia(cdUsuarioCurto, token, dateStr) {
 }
 
 function normalizeAgendaEvento(row, index) {
-  const rawDate =
-    row?.dataInicio || row?.DataInicio || row?.data || row?.Data || row?.dataAgenda || "";
+  const rawDate = row?.dataInicio || row?.DataInicio || row?.data || row?.Data || row?.dataAgenda || "";
   const dateStr = String(rawDate).slice(0, 10);
   return {
     id: `evento-${index}`,
     data: dateStr,
     horaInicio: String(row?.horaInicio || row?.HoraInicio || "").slice(0, 5),
     horaFim: String(row?.horaFim || row?.HoraFim || "").slice(0, 5),
-    nomeDisciplina:
-      row?.descricao ||
-      row?.Descricao ||
-      row?.titulo ||
-      row?.Titulo ||
-      row?.nomeEvento ||
-      "Evento escolar",
+    nomeDisciplina: row?.descricao || row?.Descricao || row?.titulo || row?.Titulo || row?.nomeEvento || "Evento escolar",
     descricaoTurma: "",
     tipo: "evento",
     raw: row,
@@ -1063,9 +609,7 @@ function normalizeAgendaEvento(row, index) {
 async function fetchAgenda(token, cdUsuarioCurto, dataInicio, dataFim) {
   const now = new Date();
   const start = dataInicio ? new Date(`${dataInicio}T00:00:00`) : now;
-  const end = dataFim
-    ? new Date(`${dataFim}T00:00:00`)
-    : new Date(start.getFullYear(), start.getMonth(), start.getDate() + 30);
+  const end = dataFim ? new Date(`${dataFim}T00:00:00`) : new Date(start.getFullYear(), start.getMonth(), start.getDate() + 30);
   const days = nextWorkdays(6, start);
   const [periodo, ...dias] = await Promise.all([
     sedGet(
@@ -1075,16 +619,9 @@ async function fetchAgenda(token, cdUsuarioCurto, dataInicio, dataFim) {
     ...days.map((day) => fetchAgendaDia(cdUsuarioCurto, token, fmtDate(day))),
   ]);
   const aulas = dias.flatMap((d) => d.events);
-  const eventos = unwrapSedList(periodo.data)
-    .map(normalizeAgendaEvento)
-    .filter((e) => e.data);
+  const eventos = unwrapSedList(periodo.data).map(normalizeAgendaEvento).filter((e) => e.data);
   const ok = !!periodo.resp?.ok || dias.some((d) => d.ok);
-  return {
-    ok,
-    status: periodo.resp?.status || 0,
-    data: periodo.data,
-    events: [...aulas, ...eventos],
-  };
+  return { ok, status: periodo.resp?.status || 0, data: periodo.data, events: [...aulas, ...eventos] };
 }
 
 async function fetchAluno(token, cdUsuarioCurto) {
@@ -1095,33 +632,15 @@ async function fetchAluno(token, cdUsuarioCurto) {
   return { resp, data };
 }
 
-async function fetchTaskDetails(
-  token2,
-  taskId,
-  roomName,
-  captchaToken,
-  captchaSessionKey = "",
-  captchaCookie = "",
-) {
+async function fetchTaskDetails(token2, taskId, roomName, captchaToken, captchaSessionKey = "", captchaCookie = "") {
   const apiKey = String(token2 || "").trim();
-  if (!apiKey || apiKey === "null" || apiKey === "undefined")
-    return {
-      resp: { ok: false, status: 400 },
-      data: { erro: "API_KEY_AUSENTE", detalhe: "Token EduSP ausente." },
-    };
-  const roomCandidates = Array.from(
-    new Set([String(roomName || "").trim(), ""].filter((room) => room.length)),
-  );
+  if (!apiKey || apiKey === "null" || apiKey === "undefined") return { resp: { ok: false, status: 400 }, data: { erro: "API_KEY_AUSENTE", detalhe: "Token EduSP ausente." } };
+  const roomCandidates = Array.from(new Set([String(roomName || "").trim(), ""].filter((room) => room.length)));
   const headers = new Headers({
-    accept: "application/json",
-    "accept-language": "pt-BR,pt;q=0.9,en-US;q=0.8,en;q=0.7",
-    "content-type": "application/json",
-    origin: "https://saladofuturo.educacao.sp.gov.br",
-    referer: "https://saladofuturo.educacao.sp.gov.br/",
-    "x-api-platform": "webclient",
-    "x-api-realm": "edusp",
-    "user-agent":
-      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/151.0.0.0 Safari/537.36",
+    "accept": "application/json", "accept-language": "pt-BR,pt;q=0.9,en-US;q=0.8,en;q=0.7", "content-type": "application/json",
+    "origin": "https://saladofuturo.educacao.sp.gov.br", "referer": "https://saladofuturo.educacao.sp.gov.br/",
+    "x-api-platform": "webclient", "x-api-realm": "edusp",
+    "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/151.0.0.0 Safari/537.36"
   });
   headers.set("x-api-key", apiKey);
   if (captchaToken) headers.set("x-captcha-token", String(captchaToken).trim());
@@ -1131,11 +650,7 @@ async function fetchTaskDetails(
   let lastError = null;
   for (const candidateRoom of roomCandidates) {
     const roomQueries = candidateRoom
-      ? [
-          `&room_name=${encodeURIComponent(candidateRoom)}`,
-          `&publication_target=${encodeURIComponent(candidateRoom)}`,
-          `&target_value=${encodeURIComponent(candidateRoom)}`,
-        ]
+      ? [`&room_name=${encodeURIComponent(candidateRoom)}`, `&publication_target=${encodeURIComponent(candidateRoom)}`, `&target_value=${encodeURIComponent(candidateRoom)}`]
       : [""];
     for (const roomQuery of roomQueries) {
       const url = `${EDUSP_BASE}/tms/task/${taskId}/apply?preview_mode=false&token_code=null${roomQuery}`;
@@ -1154,36 +669,15 @@ async function fetchTaskDetails(
       }
     }
   }
-  return {
-    resp: lastResponse || { ok: false, status: 502 },
-    data: lastData || {
-      erro: "Não foi possível conectar ao serviço de atividades.",
-      detalhe: String(lastError?.message || lastError || "Erro de rede"),
-    },
-  };
+  return { resp: lastResponse || { ok: false, status: 502 }, data: lastData || { erro: "Não foi possível conectar ao serviço de atividades.", detalhe: String(lastError?.message || lastError || "Erro de rede") } };
 }
 
-async function submitTaskAnswers(
-  token2,
-  taskId,
-  roomName,
-  answers,
-  captchaToken,
-  accessedOn,
-  executedOn,
-  captchaSessionKey = "",
-  options = {},
-) {
+async function submitTaskAnswers(token2, taskId, roomName, answers, captchaToken, accessedOn, executedOn, captchaSessionKey = "", options = {}) {
   const baseHeaders = {
-    Accept: "application/json",
-    "Content-Type": "application/json",
-    "User-Agent": UPSTREAM_HEADERS["User-Agent"],
+    Accept: "application/json", "Content-Type": "application/json", "User-Agent": UPSTREAM_HEADERS["User-Agent"],
     "Accept-Language": UPSTREAM_HEADERS["Accept-Language"],
-    Origin: UPSTREAM_HEADERS.Origin,
-    Referer: UPSTREAM_HEADERS.Referer,
-    "x-api-platform": "webclient",
-    "x-api-realm": "edusp",
-    "x-api-key": token2,
+    Origin: UPSTREAM_HEADERS.Origin, Referer: UPSTREAM_HEADERS.Referer,
+    "x-api-platform": "webclient", "x-api-realm": "edusp", "x-api-key": token2,
   };
   // O rascunho é salvo apenas com x-api-key. Mandar o token do CAPTCHA (já
   // consumido) nessas chamadas fazia a plataforma responder HTTP 400.
@@ -1194,12 +688,7 @@ async function submitTaskAnswers(
   const log = [];
   const call = async (step, url, method, body, headers) => {
     try {
-      const resp = await fetch(url, {
-        method,
-        headers: headers || baseHeaders,
-        cache: "no-store",
-        ...(body ? { body: JSON.stringify(body) } : {}),
-      });
+      const resp = await fetch(url, { method, headers: headers || baseHeaders, cache: "no-store", ...(body ? { body: JSON.stringify(body) } : {}) });
       const data = await readJson(resp);
       log.push({ step, url, method, status: resp.status, ok: resp.ok, data });
       return { ok: resp.ok, status: resp.status, data, url };
@@ -1212,80 +701,64 @@ async function submitTaskAnswers(
   // A API aceita arrays para ordenação e lacunas. O leitor da atividade guarda
   // temporariamente esses valores como objetos indexados, então convertemos na
   // ordem numérica antes de salvar o rascunho.
-  const normalizedAnswers = Object.fromEntries(
-    Object.entries(answers || {}).map(([questionId, item]) => {
-      if (!item || typeof item !== "object") return [questionId, item];
-      const type = String(item.question_type || item.type || "").toLowerCase();
-      const answer = item.answer;
-      if (
-        (type === "order-sentences" || type === "fill-words") &&
-        answer &&
-        !Array.isArray(answer) &&
-        typeof answer === "object"
-      ) {
-        const ordered = Object.keys(answer)
-          .sort((a, b) => Number(a) - Number(b))
-          .map((key) => answer[key]);
-        return [questionId, { ...item, answer: ordered }];
-      }
-      return [questionId, item];
-    }),
-  );
+  const normalizedAnswers = Object.fromEntries(Object.entries(answers || {}).map(([questionId, item]) => {
+    if (!item || typeof item !== "object") return [questionId, item];
+    const type = String(item.question_type || item.type || "").toLowerCase();
+    const answer = item.answer;
+    if ((type === "order-sentences" || type === "fill-words") && answer && !Array.isArray(answer) && typeof answer === "object") {
+      const ordered = Object.keys(answer)
+        .sort((a, b) => Number(a) - Number(b))
+        .map((key) => answer[key]);
+      return [questionId, { ...item, answer: ordered }];
+    }
+    return [questionId, item];
+  }));
 
   // ---- 1. APPLY: obtém answer_id, min_execution_time e o publication_target correto ----
-  const applyQS = (room) =>
-    `?preview_mode=false&token_code=null${room ? `&room_name=${encodeURIComponent(room)}` : ""}`;
-  const apply = await call(
-    "apply",
-    `${EDUSP_BASE}/tms/task/${taskId}/apply${applyQS(roomName)}`,
-    "GET",
-    null,
-    submitHeaders,
-  );
+  const applyQS = (room) => `?preview_mode=false&token_code=null${room ? `&room_name=${encodeURIComponent(room)}` : ""}`;
+  const apply = await call("apply", `${EDUSP_BASE}/tms/task/${taskId}/apply${applyQS(roomName)}`, "GET", null, submitHeaders);
   const lesson = apply.ok ? apply.data : null;
 
-  const isPublicationTarget = (value) =>
-    /^(?:r[a-z0-9]+-l(?::[^\s]+)?|\d+)$/i.test(String(value || "").trim());
+  const isPublicationTarget = (value) => /^(?:r[a-z0-9]+-l(?::[^\s]+)?|\d+)$/i.test(String(value || "").trim());
   const target =
     (isPublicationTarget(executedOn) ? String(executedOn).trim() : null) ||
     lesson?.publication_target ||
     (Array.isArray(lesson?.publication_targets) && lesson.publication_targets.length
-      ? typeof lesson.publication_targets[0] === "string"
-        ? lesson.publication_targets[0]
-        : lesson.publication_targets[0]?.publication_target
+      ? (typeof lesson.publication_targets[0] === "string" ? lesson.publication_targets[0] : lesson.publication_targets[0]?.publication_target)
       : null) ||
-    roomName ||
-    "room";
+    roomName || "room";
 
   const minTime = Number(lesson?.min_execution_time ?? lesson?.minExecutionTime ?? 0) || 0;
   const duration = Math.max(Number(options.duration) || 0, minTime, 60);
   const answerId =
     lesson?.answer_id ?? lesson?.answerId ?? lesson?.answer?.id ?? options.answerId ?? null;
 
-  // Envia a resposta diretamente para a API oficial EduSP.
-  const completion = await call(
-    "tms-answer",
-    `${EDUSP_BASE}/tms/answer`,
-    "POST",
-    {
-      task_id: String(taskId),
-      status: "submitted",
-      answers: normalizedAnswers,
-      duration,
-      answer_id: answerId || null,
-      publication_target: target,
-      accessed_on: accessedOn || "room",
-      executed_on: executedOn || target,
-      captcha_token: captchaToken || null,
-    },
-    submitHeaders,
-  );
+  // Conclusão direta conforme do_complete_task: não cria nem atualiza rascunho.
+  const completion = await call("complete-direct", `${TASKITOS_BASE}/api/complete`, "POST", {
+    x_auth_key: token2,
+    room_code: target,
+    lesson_id: taskId,
+    draft: false,
+    lesson_info: lesson,
+    time_spent: duration,
+    answer_id: answerId || 0,
+    target_score: 100,
+    captchaToken,
+    answers: normalizedAnswers,
+    accessed_on: accessedOn || "room",
+    executed_on: executedOn || target,
+  }, {
+    Accept: "*/*",
+    "Accept-Language": "pt-BR,pt;q=0.7",
+    "Content-Type": "application/json",
+    Origin: TASKITOS_BASE,
+    Referer: `${TASKITOS_BASE}/`,
+    "User-Agent": UPSTREAM_HEADERS["User-Agent"],
+  });
 
   return {
     resp: { ok: completion.ok, status: completion.status || 502 },
-    data: completion.ok
-      ? { ...(completion.data || {}), answer_status: "submitted" }
-      : completion.data,
+    data: completion.ok ? { ...(completion.data || {}), answer_status: "submitted" } : completion.data,
     url: completion.url,
     attempts: log,
     answer_id: answerId,
@@ -1294,53 +767,31 @@ async function submitTaskAnswers(
   };
 }
 
+
+
 function stripHtmlServer(value) {
   return String(value ?? "")
-    .replace(/<br\s*\/?>/gi, "\n")
-    .replace(/<\/p>/gi, "\n")
-    .replace(/<[^>]+>/g, " ")
-    .replace(/&nbsp;/gi, " ")
-    .replace(/&amp;/gi, "&")
-    .replace(/&lt;/gi, "<")
-    .replace(/&gt;/gi, ">")
-    .replace(/&quot;/gi, '"')
-    .replace(/&#39;/gi, "'")
-    .replace(/\s+\n/g, "\n")
-    .replace(/\n\s+/g, "\n")
-    .replace(/[ \t]{2,}/g, " ")
-    .trim();
+    .replace(/<br\s*\/?>/gi, "\n").replace(/<\/p>/gi, "\n").replace(/<[^>]+>/g, " ")
+    .replace(/&nbsp;/gi, " ").replace(/&amp;/gi, "&").replace(/&lt;/gi, "<").replace(/&gt;/gi, ">")
+    .replace(/&quot;/gi, '"').replace(/&#39;/gi, "'").replace(/\s+\n/g, "\n").replace(/\n\s+/g, "\n")
+    .replace(/[ \t]{2,}/g, " ").trim();
 }
 
 async function handleGroqResearch(request, env) {
   let body;
-  try {
-    body = await request.json();
-  } catch {
-    return jsonResponse({ erro: "Corpo inválido." }, 400);
-  }
+  try { body = await request.json(); } catch { return jsonResponse({ erro: "Corpo inválido." }, 400); }
   const question = body?.question || {};
-  const topic = stripHtmlServer(
-    body?.topic || question.statement || question.enunciado || question.text || "",
-  )
-    .trim()
-    .slice(0, 500);
+  const topic = stripHtmlServer(body?.topic || question.statement || question.enunciado || question.text || "").trim().slice(0, 500);
   if (!topic) return jsonResponse({ erro: "Tópico ou enunciado ausente." }, 400);
   const query = topic.replace(/\s+/g, " ").trim();
   const sourceMap = new Map();
   const addSource = (source) => {
     if (!source?.url || sourceMap.has(source.url)) return;
-    sourceMap.set(source.url, {
-      title: String(source.title || "Fonte"),
-      url: String(source.url),
-      snippet: String(source.snippet || "").slice(0, 900),
-    });
+    sourceMap.set(source.url, { title: String(source.title || "Fonte"), url: String(source.url), snippet: String(source.snippet || "").slice(0, 900) });
   };
   const wikiSearchUrl = `https://pt.wikipedia.org/w/api.php?action=query&list=search&srsearch=${encodeURIComponent(query)}&srlimit=4&format=json&origin=*`;
   const ddgUrl = `https://api.duckduckgo.com/?q=${encodeURIComponent(query)}&format=json&no_html=1&skip_disambig=1`;
-  const [wikiResult, ddgResult] = await Promise.allSettled([
-    fetch(wikiSearchUrl, { headers: { Accept: "application/json" } }).then(readJson),
-    fetch(ddgUrl, { headers: { Accept: "application/json" } }).then(readJson),
-  ]);
+  const [wikiResult, ddgResult] = await Promise.allSettled([fetch(wikiSearchUrl, { headers: { Accept: "application/json" } }).then(readJson), fetch(ddgUrl, { headers: { Accept: "application/json" } }).then(readJson)]);
   const wikiData = wikiResult.status === "fulfilled" ? wikiResult.value : null;
   const ddgData = ddgResult.status === "fulfilled" ? ddgResult.value : null;
   const wikiHits = Array.isArray(wikiData?.query?.search) ? wikiData.query.search : [];
@@ -1351,60 +802,24 @@ async function handleGroqResearch(request, env) {
     addSource({ title: `Wikipédia: ${title}`, url, snippet: stripHtmlServer(hit?.snippet || "") });
   }
   const related = Array.isArray(ddgData?.RelatedTopics) ? ddgData.RelatedTopics : [];
-  const flattenRelated = (items) =>
-    items.flatMap((item) => (Array.isArray(item?.Topics) ? flattenRelated(item.Topics) : [item]));
+  const flattenRelated = (items) => items.flatMap((item) => Array.isArray(item?.Topics) ? flattenRelated(item.Topics) : [item]);
   for (const item of flattenRelated(related).slice(0, 4)) {
-    if (item?.FirstURL)
-      addSource({
-        title: item?.Text?.split(" - ")[0] || "Resultado de pesquisa",
-        url: item.FirstURL,
-        snippet: item.Text || "",
-      });
+    if (item?.FirstURL) addSource({ title: item?.Text?.split(" - ")[0] || "Resultado de pesquisa", url: item.FirstURL, snippet: item.Text || "" });
   }
   const sourceList = Array.from(sourceMap.values()).slice(0, 6);
-  const sourcesText = sourceList
-    .map(
-      (source, index) =>
-        `[${index + 1}] ${source.title}\nURL: ${source.url}\nResumo: ${source.snippet}`,
-    )
-    .join("\n\n");
+  const sourcesText = sourceList.map((source, index) => `[${index + 1}] ${source.title}\nURL: ${source.url}\nResumo: ${source.snippet}`).join("\n\n");
   const options = Array.isArray(question.options) ? question.options : [];
-  const optionsText = options
-    .map(
-      (opt, index) =>
-        `${index + 1}. ${stripHtmlServer(opt?.text ?? opt?.texto ?? opt?.label ?? opt?.statement ?? "")}`,
-    )
-    .filter(Boolean)
-    .join("\n");
-  const apiKey = getGroqApiKey(env);
+  const optionsText = options.map((opt, index) => `${index + 1}. ${stripHtmlServer(opt?.text ?? opt?.texto ?? opt?.label ?? opt?.statement ?? "")}`).filter(Boolean).join("\n");
+  const apiKey = String(env?.GROQ_API_KEY || GROQ_API_KEY || "").trim();
   if (!apiKey) return jsonResponse({ erro: "GROQ_API_KEY não configurada no Worker." }, 500);
   const prompt = `Você é um assistente de pesquisa e escrita escolar em português do Brasil. Produza uma resposta completa, clara e didática para o tópico abaixo, como um estudante dedicado que compreendeu o conteúdo. Use Markdown com título, introdução, desenvolvimento e conclusão quando fizer sentido. Sintetize as fontes, compare informações e não copie trechos longos. Toda afirmação factual importante deve indicar a fonte no formato [n], usando apenas os números fornecidos. Ao final, inclua uma seção ## Referências com os links numerados. Se o tópico pedir criação literária, use os fatos pesquisados como contexto e deixe claro o que é criação. Não mencione APIs, modelos, treinamento ou infraestrutura. Nunca envie a resposta para a plataforma; ela será revisada e inserida manualmente pelo aluno.\n\nTópico/enunciado:\n${query}\n${optionsText ? `\nAlternativas ou instruções adicionais:\n${optionsText}` : ""}\n\nFontes encontradas:\n${sourcesText || "Nenhuma fonte externa retornou dados; responda com cautela e informe essa limitação."}`;
   const resp = await fetch(GROQ_URL, {
     method: "POST",
-    headers: { "Content-Type": "application/json", Authorization: `Bearer ${apiKey}` },
-    body: JSON.stringify({
-      model: "openai/gpt-oss-20b",
-      messages: [
-        {
-          role: "system",
-          content:
-            "Você é um assistente escolar de pesquisa e escrita. Seja preciso, didático e transparente sobre fontes e incertezas.",
-        },
-        { role: "user", content: prompt },
-      ],
-      temperature: 0.35,
-      max_completion_tokens: 1800,
-    }),
+    headers: { "Content-Type": "application/json", "Authorization": `Bearer ${apiKey}` },
+    body: JSON.stringify({ model: "openai/gpt-oss-20b", messages: [{ role: "system", content: "Você é um assistente escolar de pesquisa e escrita. Seja preciso, didático e transparente sobre fontes e incertezas." }, { role: "user", content: prompt }], temperature: 0.35, max_completion_tokens: 1800 })
   });
   const data = await readJson(resp);
-  if (!resp.ok)
-    return jsonResponse(
-      {
-        erro: "Falha na pesquisa assistida",
-        detalhe: data?.error?.message || data?.message || `Groq retornou HTTP ${resp.status}`,
-      },
-      resp.status,
-    );
+  if (!resp.ok) return jsonResponse({ erro: "Falha na pesquisa assistida", detalhe: data?.error?.message || data?.message || `Groq retornou HTTP ${resp.status}` }, resp.status);
   const answer = data?.choices?.[0]?.message?.content || "";
   if (!answer) return jsonResponse({ erro: "A IA não retornou uma resposta de pesquisa." }, 502);
   return jsonResponse({ ok: true, answer, sources: sourceList, model: "openai/gpt-oss-20b" });
@@ -1412,45 +827,26 @@ async function handleGroqResearch(request, env) {
 
 async function handleGroqHelp(request, env) {
   let body;
-  try {
-    body = await request.json();
-  } catch {
-    return jsonResponse({ erro: "Corpo inválido." }, 400);
-  }
+  try { body = await request.json(); } catch { return jsonResponse({ erro: "Corpo inválido." }, 400); }
   const question = body?.question || {};
-  const statement = stripHtmlServer(
-    question.statement ??
-      question.enunciado ??
-      question.texto ??
-      question.question ??
-      question.text ??
-      "",
-  );
+  const statement = stripHtmlServer(question.statement ?? question.enunciado ?? question.texto ?? question.question ?? question.text ?? "");
   if (!statement) return jsonResponse({ erro: "Enunciado ausente." }, 400);
   const rawOptions = question.options ?? question.alternativas ?? question.opcoes ?? null;
   let options = [];
   if (Array.isArray(rawOptions)) options = rawOptions;
   else if (rawOptions && typeof rawOptions === "object") options = Object.values(rawOptions);
-  const optionsText = options
-    .map((opt, index) => {
-      const id = opt?.id ?? opt?.codigo ?? index;
-      const text = stripHtmlServer(
-        opt?.statement ?? opt?.texto ?? opt?.text ?? opt?.enunciado ?? opt?.label ?? "",
-      );
-      return `${index + 1}. [${id}] ${text}`;
-    })
-    .filter(Boolean)
-    .join("\n");
+  const optionsText = options.map((opt, index) => {
+    const id = opt?.id ?? opt?.codigo ?? index;
+    const text = stripHtmlServer(opt?.statement ?? opt?.texto ?? opt?.text ?? opt?.enunciado ?? opt?.label ?? "");
+    return `${index + 1}. [${id}] ${text}`;
+  }).filter(Boolean).join("\n");
   const type = String(question.type || "desconhecido");
-  const wantsAnswer =
-    String(body?.mode || "").toLowerCase() === "answer" ||
-    /\b(resposta|gabarito|resolva|resolver)\b/i.test(String(body?.request || ""));
-  const prompt =
-    `Você é um tutor escolar do Flash, em português do Brasil. Explique a questão de forma objetiva, didática e adequada ao nível escolar. ${wantsAnswer ? "O aluno pediu explicitamente a resposta final: entregue a resposta mais provável de forma clara, começando direto com o texto da resposta, sem nenhum título como 'Resposta'. Para ordenação, liste a sequência final; para lacunas, preencha em ordem; para alternativas, indique o número e o texto. Depois explique brevemente os motivos." : "Não entregue simplesmente a resposta final: explique o conceito e mostre um caminho curto para o aluno chegar à resposta. Se houver alternativas, ajude a comparar/eliminar as opções sem apenas dizer a letra correta."} Se houver cálculo, mostre as etapas. Escreva TODAS as contas e fórmulas em texto simples e legível, usando símbolos comuns (× ÷ √ ² ³ ≤ ≥ π %), NUNCA use notação LaTeX como \times, \frac, \( \) ou $...$ — escreva por exemplo: M = 10.000 × (1 + 0,05 × 2) = 11.000. Nunca clique, preencha campos ou envie a atividade na plataforma; o aluno fará essas ações manualmente. Não termine com dica, não escreva nenhuma seção de 'Dica'.\n\nTipo da questão: ${type}\nEnunciado:\n${statement}\n${optionsText ? `\nAlternativas/itens:\n${optionsText}` : ""}`.trim();
-  const apiKey = getGroqApiKey(env);
+  const wantsAnswer = String(body?.mode || "").toLowerCase() === "answer" || /\b(resposta|gabarito|resolva|resolver)\b/i.test(String(body?.request || ""));
+  const prompt = `Você é um tutor escolar do Flash, em português do Brasil. Explique a questão de forma objetiva, didática e adequada ao nível escolar. ${wantsAnswer ? "O aluno pediu explicitamente a resposta final: entregue a resposta mais provável de forma clara, começando direto com o texto da resposta, sem nenhum título como 'Resposta'. Para ordenação, liste a sequência final; para lacunas, preencha em ordem; para alternativas, indique o número e o texto. Depois explique brevemente os motivos." : "Não entregue simplesmente a resposta final: explique o conceito e mostre um caminho curto para o aluno chegar à resposta. Se houver alternativas, ajude a comparar/eliminar as opções sem apenas dizer a letra correta."} Se houver cálculo, mostre as etapas. Escreva TODAS as contas e fórmulas em texto simples e legível, usando símbolos comuns (× ÷ √ ² ³ ≤ ≥ π %), NUNCA use notação LaTeX como \times, \frac, \( \) ou $...$ — escreva por exemplo: M = 10.000 × (1 + 0,05 × 2) = 11.000. Nunca clique, preencha campos ou envie a atividade na plataforma; o aluno fará essas ações manualmente. Não termine com dica, não escreva nenhuma seção de 'Dica'.\n\nTipo da questão: ${type}\nEnunciado:\n${statement}\n${optionsText ? `\nAlternativas/itens:\n${optionsText}` : ""}`.trim();
+  const apiKey = String(env?.GROQ_API_KEY || GROQ_API_KEY || "").trim();
   if (!apiKey) return jsonResponse({ erro: "GROQ_API_KEY não configurada no Worker." }, 500);
 
-  const MODELS = ["openai/gpt-oss-20b", "llama-3.3-70b-versatile"];
+  const MODELS = ["openai/gpt-oss-20b", "llama-3.3-70b-versatile", "llama-3.1-8b-instant"];
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   let lastStatus = 502;
   let lastMessage = "A IA não respondeu.";
@@ -1461,20 +857,16 @@ async function handleGroqHelp(request, env) {
     try {
       resp = await fetch(GROQ_URL, {
         method: "POST",
-        headers: { "Content-Type": "application/json", Authorization: `Bearer ${apiKey}` },
+        headers: { "Content-Type": "application/json", "Authorization": `Bearer ${apiKey}` },
         body: JSON.stringify({
           model,
           messages: [
-            {
-              role: "system",
-              content:
-                "Você é o Flash IA, um tutor escolar em português do Brasil. Seja claro, curto e didático. Nunca fale sobre APIs, código, infraestrutura, provedor, empresa, modelo, treinamento ou quem criou/treinou você. Quando o aluno pedir explicitamente a resposta de uma questão fornecida, informe a resposta mais provável e explique o motivo. Não invente dados.",
-            },
-            { role: "user", content: prompt },
+            { role: "system", content: "Você é o Flash IA, um tutor escolar em português do Brasil. Seja claro, curto e didático. Nunca fale sobre APIs, código, infraestrutura, provedor, empresa, modelo, treinamento ou quem criou/treinou você. Quando o aluno pedir explicitamente a resposta de uma questão fornecida, informe a resposta mais provável e explique o motivo. Não invente dados." },
+            { role: "user", content: prompt }
           ],
           temperature: 0.35,
-          max_completion_tokens: 700,
-        }),
+          max_completion_tokens: 700
+        })
       });
       data = await readJson(resp);
     } catch (err) {
@@ -1507,46 +899,42 @@ async function handleGroqHelp(request, env) {
     break;
   }
 
-  return jsonResponse(
-    { erro: "Falha na IA", detalhe: lastMessage, upstream_status: lastStatus },
-    lastStatus === 429 ? 429 : lastStatus || 502,
-  );
+  return jsonResponse({ erro: "Falha na IA", detalhe: lastMessage, upstream_status: lastStatus }, lastStatus === 429 ? 429 : lastStatus || 502);
 }
+
 
 // =======================================================
 // GROQ CHAT (TEXTO E VISÃO)
 // =======================================================
 async function handleGroqChat(request, env) {
   let body;
-  try {
-    body = await request.json();
-  } catch {
-    return jsonResponse({ erro: "Corpo inválido" }, 400);
-  }
+  try { body = await request.json(); } catch { return jsonResponse({ erro: "Corpo inválido" }, 400); }
 
   const messages = Array.isArray(body?.messages) ? body.messages : [];
   const imageBase64 = typeof body?.image === "string" ? body.image.trim() : "";
   const mime = String(body?.imageMime || "image/jpeg").split(";")[0] || "image/jpeg";
-  const apiKey = getGroqApiKey(env);
+  const apiKey = String(env?.GROQ_API_KEY || GROQ_API_KEY || "").trim();
   if (!apiKey) return jsonResponse({ erro: "GROQ_API_KEY não configurada no Worker." }, 500);
   if (!messages.length && !imageBase64) return jsonResponse({ erro: "Mensagem vazia." }, 400);
 
-  const safeMessages = compactGroqMessages(messages);
-  if (!safeMessages.length)
-    safeMessages.push({ role: "user", content: "Analise a imagem enviada." });
+  const safeMessages = messages.slice(-12).map(m => ({
+    role: m?.role === "assistant" ? "assistant" : "user",
+    content: String(m?.content || "")
+  }));
+  if (!safeMessages.length) safeMessages.push({ role: "user", content: "Analise a imagem enviada." });
 
   if (imageBase64) {
     const last = safeMessages[safeMessages.length - 1];
     const text = last.content || "Analise esta imagem e me ajude a estudar.";
     last.content = [
       { type: "text", text },
-      { type: "image_url", image_url: { url: `data:${mime};base64,${imageBase64}` } },
+      { type: "image_url", image_url: { url: `data:${mime};base64,${imageBase64}` } }
     ];
   }
 
   const models = imageBase64
     ? ["meta-llama/llama-4-scout-17b-16e-instruct", "meta-llama/llama-4-maverick-17b-128e-instruct"]
-    : ["llama-3.3-70b-versatile", "openai/gpt-oss-20b"];
+    : ["llama-3.3-70b-versatile", "openai/gpt-oss-20b", "llama-3.1-8b-instant"];
 
   let lastData = null;
   let lastStatus = 502;
@@ -1554,65 +942,34 @@ async function handleGroqChat(request, env) {
     const payload = {
       model,
       messages: [
-        {
-          role: "system",
-          content:
-            "Você é o Flash IA, um tutor escolar em português do Brasil. Explique de forma clara, objetiva e didática. Ao analisar imagens, leia o conteúdo visível, incluindo questões, tabelas e respostas destacadas. Não invente informações que não estejam disponíveis.",
-        },
-        ...safeMessages,
+        { role: "system", content: "Você é o Flash IA, um tutor escolar em português do Brasil. Explique de forma clara, objetiva e didática. Ao analisar imagens, leia o conteúdo visível, incluindo questões, tabelas e respostas destacadas. Não invente informações que não estejam disponíveis." },
+        ...safeMessages
       ],
       temperature: imageBase64 ? 0.35 : 0.65,
-      max_completion_tokens: 2048,
+      max_completion_tokens: 2048
     };
-    let resp, data;
-    try {
-      resp = await fetch(GROQ_URL, {
-        method: "POST",
-        headers: { "Content-Type": "application/json", Authorization: `Bearer ${apiKey}` },
-        body: JSON.stringify(payload),
-      });
-      data = await readJson(resp);
-    } catch (error) {
-      lastStatus = 502;
-      lastData = { message: String(error?.message || error) };
-      continue;
-    }
+    const resp = await fetch(GROQ_URL, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "Authorization": `Bearer ${apiKey}` },
+      body: JSON.stringify(payload)
+    });
+    const data = await readJson(resp);
     if (resp.ok) {
-      return jsonResponse({
-        ok: true,
-        response: data?.choices?.[0]?.message?.content || "Sem resposta",
-        model,
-      });
+      return jsonResponse({ ok: true, response: data?.choices?.[0]?.message?.content || "Sem resposta", model });
     }
-    lastData = data;
-    lastStatus = resp.status;
-    // 400/404 = modelo indisponível: tenta o próximo. Erros transitórios também tentam fallback.
-    if (resp.status !== 400 && resp.status !== 404 && resp.status !== 429 && resp.status < 500)
-      break;
+    lastData = data; lastStatus = resp.status;
+    // 400/404 = modelo indisponível: tenta o próximo. Outros erros interrompem.
+    if (resp.status !== 400 && resp.status !== 404) break;
   }
-  const message =
-    lastData?.error?.message || lastData?.message || `Groq retornou HTTP ${lastStatus}`;
-  return jsonResponse(
-    {
-      erro: "Falha na Groq",
-      detalhe: message,
-      upstream_status: lastStatus,
-      groq_error: lastData?.error || null,
-    },
-    lastStatus,
-  );
+  const message = lastData?.error?.message || lastData?.message || `Groq retornou HTTP ${lastStatus}`;
+  return jsonResponse({ erro: "Falha na Groq", detalhe: message, upstream_status: lastStatus, groq_error: lastData?.error || null }, lastStatus);
 }
 
 // =======================================================
 // NOTIFICAÇÕES (EM MEMÓORIA)
 // =======================================================
 async function handleGetNotifications() {
-  return jsonResponse({
-    ok: true,
-    notifications: [...NOTIFICATIONS_DB].sort((a, b) =>
-      String(b.date).localeCompare(String(a.date)),
-    ),
-  });
+  return jsonResponse({ ok: true, notifications: [...NOTIFICATIONS_DB].sort((a,b) => String(b.date).localeCompare(String(a.date))) });
 }
 
 function adminAllowed(request) {
@@ -1622,21 +979,11 @@ function adminAllowed(request) {
 async function handleSaveNotification(request) {
   if (!adminAllowed(request)) return jsonResponse({ erro: "Não autorizado" }, 403);
   let body;
-  try {
-    body = await request.json();
-  } catch {
-    return jsonResponse({ erro: "Corpo inválido" }, 400);
-  }
+  try { body = await request.json(); } catch { return jsonResponse({ erro: "Corpo inválido" }, 400); }
   const title = String(body?.title || "").trim();
   const description = String(body?.description || "").trim();
-  if (!title || !description)
-    return jsonResponse({ erro: "Título e descrição são obrigatórios" }, 400);
-  const item = {
-    id: crypto.randomUUID ? crypto.randomUUID() : Date.now().toString(),
-    title,
-    description,
-    date: new Date().toISOString(),
-  };
+  if (!title || !description) return jsonResponse({ erro: "Título e descrição são obrigatórios" }, 400);
+  const item = { id: crypto.randomUUID ? crypto.randomUUID() : Date.now().toString(), title, description, date: new Date().toISOString() };
   NOTIFICATIONS_DB.push(item);
   return jsonResponse({ ok: true, notification: item });
 }
@@ -1646,23 +993,13 @@ async function handleEditNotification(request) {
   const id = new URL(request.url).searchParams.get("id");
   if (!id) return jsonResponse({ erro: "ID ausente" }, 400);
   let body;
-  try {
-    body = await request.json();
-  } catch {
-    return jsonResponse({ erro: "Corpo inválido" }, 400);
-  }
+  try { body = await request.json(); } catch { return jsonResponse({ erro: "Corpo inválido" }, 400); }
   const title = String(body?.title || "").trim();
   const description = String(body?.description || "").trim();
-  if (!title || !description)
-    return jsonResponse({ erro: "Título e descrição são obrigatórios" }, 400);
-  const index = NOTIFICATIONS_DB.findIndex((n) => String(n.id) === String(id));
+  if (!title || !description) return jsonResponse({ erro: "Título e descrição são obrigatórios" }, 400);
+  const index = NOTIFICATIONS_DB.findIndex(n => String(n.id) === String(id));
   if (index < 0) return jsonResponse({ erro: "Notificação não encontrada" }, 404);
-  NOTIFICATIONS_DB[index] = {
-    ...NOTIFICATIONS_DB[index],
-    title,
-    description,
-    editedAt: new Date().toISOString(),
-  };
+  NOTIFICATIONS_DB[index] = { ...NOTIFICATIONS_DB[index], title, description, editedAt: new Date().toISOString() };
   return jsonResponse({ ok: true, notification: NOTIFICATIONS_DB[index] });
 }
 
@@ -1671,7 +1008,7 @@ async function handleDeleteNotification(request, url) {
   const id = url.searchParams.get("id");
   if (!id) return jsonResponse({ erro: "ID ausente" }, 400);
   const before = NOTIFICATIONS_DB.length;
-  NOTIFICATIONS_DB = NOTIFICATIONS_DB.filter((n) => String(n.id) !== String(id));
+  NOTIFICATIONS_DB = NOTIFICATIONS_DB.filter(n => String(n.id) !== String(id));
   return jsonResponse({ ok: true, deleted: before !== NOTIFICATIONS_DB.length });
 }
 
@@ -1681,6 +1018,17 @@ async function handleDeleteNotification(request, url) {
 // Troca o token do SED pelo auth_token do EduSP. O endpoint às vezes responde
 // com 403/429/502 de forma intermitente (proteção antibot do ip.tv), por isso
 // tentamos algumas vezes com um pequeno atraso antes de desistir.
+function jwtNick(token) {
+  try {
+    const part = String(token || "").split(".")[1];
+    if (!part) return "";
+    const json = JSON.parse(Buffer.from(part.replace(/-/g, "+").replace(/_/g, "/"), "base64").toString("utf8"));
+    return json?.realm === "edusp" && json?.nick ? String(json.nick).trim() : "";
+  } catch {
+    return "";
+  }
+}
+
 async function exchangeEduspToken(token) {
   const headerVariants = [
     {
@@ -1728,41 +1076,23 @@ async function exchangeEduspToken(token) {
   }
   return {
     resp: lastResp || { ok: false, status: 502 },
-    data: lastData || {
-      erro: String(lastError?.message || lastError || "Falha de rede ao contatar o Sala do Futuro"),
-    },
+    data: lastData || { erro: String(lastError?.message || lastError || "Falha de rede ao contatar o Sala do Futuro") },
   };
 }
 
 async function handleLogin(request) {
   let body;
-  try {
-    body = await request.json();
-  } catch {
-    return jsonResponse({ erro: "Corpo da requisição inválido" }, 400);
-  }
+  try { body = await request.json(); } catch { return jsonResponse({ erro: "Corpo da requisição inválido" }, 400); }
   const { usuario, senha } = body || {};
   if (!usuario || !senha) return jsonResponse({ erro: "Informe usuário e senha" }, 400);
-  const loginResp = await fetch(
-    `${SED_BASE}/saladofuturobffapi/credenciais/api/LoginCompletoToken`,
-    {
-      method: "POST",
-      headers: {
-        Accept: "application/json",
-        "Content-Type": "application/json",
-        "Ocp-Apim-Subscription-Key": SUBSCRIPTION_KEYS.login,
-      },
-      body: JSON.stringify({ user: usuario, senha }),
-    },
-  );
+  const loginResp = await fetch(`${SED_BASE}/saladofuturobffapi/credenciais/api/LoginCompletoToken`, {
+    method: "POST",
+    headers: { Accept: "application/json", "Content-Type": "application/json", "Ocp-Apim-Subscription-Key": SUBSCRIPTION_KEYS.login },
+    body: JSON.stringify({ user: usuario, senha }),
+  });
   const loginData = await readJson(loginResp);
-  const sfSid = extractCookieValue(loginResp.headers.get("set-cookie"), "sf_sid");
   const dados = loginData?.DadosUsuario || {};
-  if (!loginResp.ok || !loginData?.token || !dados)
-    return jsonResponse(
-      { erro: "Usuário ou senha inválidos", detalhe: loginData },
-      loginResp.status >= 400 ? loginResp.status : 401,
-    );
+  if (!loginResp.ok || !loginData?.token || !dados) return jsonResponse({ erro: "Usuário ou senha inválidos", detalhe: loginData }, loginResp.status >= 400 ? loginResp.status : 401);
   const token = String(loginData.token || "").trim();
   const cdUsuario = Number(dados.CD_USUARIO || 0);
   const username = dados.NM_NICK || loginData?.nick || "";
@@ -1784,7 +1114,7 @@ async function handleLogin(request) {
         token2: token,
         eduspUnavailable: true,
         aviso: upstreamMsg,
-      }, 200, sfSid ? { "Set-Cookie": setCookieHeader("sf_sid", sfSid) } : {});
+      });
     }
     return jsonResponse(
       {
@@ -1795,15 +1125,10 @@ async function handleLogin(request) {
       tokenResp.status || 401,
     );
   }
-  return jsonResponse({
-    nome: dados.NAME || "Aluno",
-    apelido: username,
-    email: dados.EMAIL || "",
-    cdUsuario,
-    cdUsuarioCurto: String(Math.trunc(cdUsuario / 10)),
-    token,
-    token2: tokenData.auth_token,
-  }, 200, sfSid ? { "Set-Cookie": setCookieHeader("sf_sid", sfSid) } : {});
+  // O identificador usado nas turmas de tarefas é o "nick" do EduSP
+  // (ex.: gabrielhenr127241606-sp), não o apelido do SED.
+  const eduspNick = String(tokenData.nick || jwtNick(tokenData.auth_token) || username || "").trim();
+  return jsonResponse({ nome: dados.NAME || "Aluno", apelido: eduspNick, email: dados.EMAIL || "", cdUsuario, cdUsuarioCurto: String(Math.trunc(cdUsuario / 10)), token, token2: tokenData.auth_token });
 }
 
 async function handleDashboard(request) {
@@ -1811,58 +1136,37 @@ async function handleDashboard(request) {
   const token = request.headers.get("X-Token");
   const cdUsuario = request.headers.get("X-Cd-Usuario");
   const username = request.headers.get("X-Task-User") || "";
-  if (!token2 || !cdUsuario)
-    return jsonResponse({ erro: "Cabeçalhos X-Token2 e X-Cd-Usuario são obrigatórios" }, 400);
-  const [roomsResult, faltasResult, notificationsResult, alunoResult, agendaResult] =
-    await Promise.all([
-      fetchTurmas(cdUsuario, token),
-      fetchFaltas(cdUsuario, token),
-      fetchNotifications(cdUsuario),
-      token ? fetchAluno(token, cdUsuario) : Promise.resolve({ resp: { ok: false }, data: null }),
-      token ? fetchAgenda(token, cdUsuario) : Promise.resolve({ ok: false, events: [] }),
-    ]);
+  if (!token2 || !cdUsuario) return jsonResponse({ erro: "Cabeçalhos X-Token2 e X-Cd-Usuario são obrigatórios" }, 400);
+  const [roomsResult, faltasResult, notificationsResult, alunoResult, agendaResult] = await Promise.all([
+    fetchTurmas(cdUsuario, token), fetchFaltas(cdUsuario, token), fetchNotifications(cdUsuario),
+    token ? fetchAluno(token, cdUsuario) : Promise.resolve({ resp: { ok: false }, data: null }),
+    token ? fetchAgenda(token, cdUsuario) : Promise.resolve({ ok: false, events: [] }),
+  ]);
   const rooms = roomsResult.rooms;
   // Sessões restauradas do navegador podem conservar um token EduSP antigo.
   // Renove-o com o token SED antes de consultar salas e tarefas; se a troca
   // estiver temporariamente bloqueada, preserve o token recebido como fallback.
   let currentTaskToken = token2;
+  let taskNick = "";
   if (token) {
     const refreshed = await exchangeEduspToken(token);
     if (refreshed.resp?.ok && refreshed.data?.auth_token) {
       currentTaskToken = String(refreshed.data.auth_token).trim();
+      taskNick = String(refreshed.data.nick || "").trim();
     }
   }
-  const taskResult = await fetchTasks(currentTaskToken, rooms, username);
-  const surveyPending = await fetchSurveyTodoCount(currentTaskToken, taskResult.roomData, username, true).catch(() => ({ resp: { ok: false, status: 502 }, count: 0 }));
-  const turmasIdentificadas = Array.from(new Set([
-    ...rooms.map((room) => room?.name).filter(Boolean),
-    ...(taskResult.roomData?.rooms || []).map((room) => room?.name).filter(Boolean),
-  ]));
+  taskNick = taskNick || jwtNick(currentTaskToken) || username;
+  const taskResult = await fetchTasks(currentTaskToken, rooms, taskNick);
   const aluno = alunoResult.data;
   const alunoData = aluno?.data && typeof aluno.data === "object" ? aluno.data : aluno;
   return jsonResponse({
-    aluno: alunoData || {},
-    turmas: rooms,
-    turmasIdentificadas,
-    tarefas: taskResult.tasks,
-    pendencias: surveyPending.count || taskResult.tasks.filter((t) => t.status === "pending").length,
+    aluno: alunoData || {}, turmas: rooms, tarefas: taskResult.tasks,
+    pendencias: taskResult.tasks.filter((t) => t.status === "pending").length,
 
-    faltas: faltasResult.total,
-    mensagensNaoLidas: notificationsResult.unread,
-    mensagens: notificationsResult.total,
-    targets: taskResult.targets,
-    tarefasApiOk: taskResult.ok || surveyPending.resp.ok,
-    tarefasApiStatus: taskResult.status || surveyPending.resp.status,
+    faltas: faltasResult.total, mensagensNaoLidas: notificationsResult.unread, mensagens: notificationsResult.total,
+    targets: taskResult.targets, tarefasApiOk: taskResult.ok, tarefasApiStatus: taskResult.status,
     agenda: agendaResult.ok ? agendaResult.events : [],
-    meta: {
-      turmasApiOk: roomsResult.resp.ok,
-      roomTargetsStatus: taskResult.roomTargetsStatus || 0,
-      surveyTodoStatus: surveyPending.resp.status || 0,
-      faltasApiOk: faltasResult.resp.ok,
-      notificationsApiOk: notificationsResult.ok,
-      alunoApiOk: !!alunoResult.resp?.ok,
-      agendaApiOk: !!agendaResult.ok,
-    },
+    meta: { turmasApiOk: roomsResult.resp.ok, faltasApiOk: faltasResult.resp.ok, notificationsApiOk: notificationsResult.ok, alunoApiOk: !!alunoResult.resp?.ok, agendaApiOk: !!agendaResult.ok },
   });
 }
 
@@ -1876,14 +1180,12 @@ function sedSessionFrom(request) {
 async function handleAgenda(request, url) {
   const { token, cdUsuario } = sedSessionFrom(request);
   if (!cdUsuario) return jsonResponse({ ok: false, erro: "Sessão inválida", data: [] }, 400);
-  const result = await fetchAgenda(
-    token,
-    cdUsuario,
-    url.searchParams.get("inicio") || "",
-    url.searchParams.get("fim") || "",
-  );
+  const result = await fetchAgenda(token, cdUsuario, url.searchParams.get("inicio") || "", url.searchParams.get("fim") || "");
   return jsonResponse({ ok: result.ok, status: result.status, data: result.events });
 }
+
+
+
 
 function normalizeBoletimRows(data) {
   const rows = unwrapSedList(data).filter((row) => row && typeof row === "object");
@@ -1891,9 +1193,7 @@ function normalizeBoletimRows(data) {
   // então a ordem de ocorrência é invertida: a última linha da disciplina é o 1º bimestre.
   const grupos = new Map();
   rows.forEach((row, index) => {
-    const disciplina = toTitleCase(
-      row?.nomeDisciplina || row?.nomeComponenteCurricular || "Disciplina",
-    );
+    const disciplina = toTitleCase(row?.nomeDisciplina || row?.nomeComponenteCurricular || "Disciplina");
     const chave = String(row?.disciplinaId ?? disciplina);
     if (!grupos.has(chave)) grupos.set(chave, []);
     grupos.get(chave).push({ row, index, disciplina });
@@ -1929,28 +1229,18 @@ function normalizeBoletimRows(data) {
       const nota = numberValue(row?.notaAtribuida);
       const media = numberValue(row?.notaAtribuidaMediaFinal);
       list.push({ ...base, nota, bimestre });
-      if (media !== null)
-        list.push({
-          ...base,
-          id: `${base.id}-final`,
-          nota: media,
-          mediaFinal: media,
-          bimestre: "Média final",
-        });
+      if (media !== null) list.push({ ...base, id: `${base.id}-final`, nota: media, mediaFinal: media, bimestre: "Média final" });
     });
   });
   return list;
 }
 
+
 async function handleBoletim(request, url) {
   const { token, cdUsuario } = sedSessionFrom(request);
   if (!cdUsuario) return jsonResponse({ ok: false, erro: "Sessão inválida", data: [] }, 400);
   const result = await fetchBoletim(cdUsuario, token, url.searchParams.get("ano") || "");
-  return jsonResponse({
-    ok: result.ok,
-    status: result.status,
-    data: normalizeBoletimRows(result.data),
-  });
+  return jsonResponse({ ok: result.ok, status: result.status, data: normalizeBoletimRows(result.data) });
 }
 
 // GetAvaliacaoAluno: uma linha por avaliação/prova lançada pelo professor.
@@ -1963,73 +1253,18 @@ async function fetchAvaliacoes(cdUsuarioCurto, token, anoLetivo) {
 }
 
 function normalizeAvaliacoes(data, disciplinaPorId) {
-  const rows = unwrapSedList(data).filter(
-    (row) => row && typeof row === "object" && !row.dataExclusao && !row.DataExclusao,
-  );
+  const rows = unwrapSedList(data).filter((row) => row && typeof row === "object" && !row.dataExclusao);
   const list = rows.map((row, index) => {
-    const id = firstValue(row, [
-      "disciplinaId",
-      "DisciplinaId",
-      "codigoDisciplina",
-      "CodigoDisciplina",
-    ]);
-    const nota =
-      firstNoteValue(row, [
-        "notaAtribuida",
-        "nota",
-        "valorNota",
-        "notaAluno",
-        "notaLancada",
-        "notaObtida",
-        "notaAvaliacao",
-        "notaFinal",
-        "notaAtribuidaMediaFinal",
-        "notaMediaFinal",
-        "mediaFinal",
-        "score",
-        "grade",
-      ]) ?? findNoteValue(row);
-    const bimestreRaw = firstValue(row, [
-      "bimestre",
-      "Bimestre",
-      "bimestreNumero",
-      "BimestreNumero",
-      "periodo",
-      "Periodo",
-    ]);
-    const bimestreMatch = String(bimestreRaw ?? "").match(/[1-4]/);
-    const avaliacaoId = firstValue(row, [
-      "avaliacaoId",
-      "AvaliacaoId",
-      "idAvaliacao",
-      "IdAvaliacao",
-    ]);
-    const notaId = firstValue(row, ["avaliacaoNotaId", "AvaliacaoNotaId", "notaId", "NotaId"]);
+    const id = row?.disciplinaId ?? null;
     return {
-      // O ID da avaliação existe mesmo quando notaAtribuida ainda é nula.
-      id: avaliacaoId ?? notaId ?? `av-${index}`,
-      avaliacaoId,
-      avaliacaoNotaId: notaId,
-      prova: String(
-        firstValue(row, [
-          "descricaoAvaliacao",
-          "DescricaoAvaliacao",
-          "nomeAvaliacao",
-          "NomeAvaliacao",
-          "descricao",
-          "Descricao",
-        ]) || "Avaliação",
-      ).trim(),
-      data: firstValue(row, ["dataAvaliacao", "DataAvaliacao", "data", "Data"]),
-      nota: numberValue(nota),
-      peso: numberValue(firstValue(row, ["peso", "Peso", "pesoAvaliacao", "PesoAvaliacao"])),
-      bimestre: bimestreMatch ? Number(bimestreMatch[0]) : null,
+      id: row?.avaliacaoNotaId ?? row?.avaliacaoId ?? `av-${index}`,
+      prova: String(row?.descricaoAvaliacao || "Avaliação").trim(),
+      data: row?.dataAvaliacao || null,
+      nota: numberValue(row?.notaAtribuida),
+      peso: numberValue(row?.peso),
+      bimestre: numberValue(row?.bimestre),
       disciplinaId: id,
-      disciplina:
-        disciplinaPorId?.get?.(String(id)) ||
-        String(
-          firstValue(row, ["nomeDisciplina", "NomeDisciplina", "disciplina", "Disciplina"]) || "",
-        ),
+      disciplina: disciplinaPorId?.get?.(String(id)) || "",
     };
   });
   list.sort((a, b) => String(b.data || "").localeCompare(String(a.data || "")));
@@ -2047,11 +1282,7 @@ async function handleNotas(request, url) {
   const boletimRows = normalizeBoletimRows(boletim.data);
   const disciplinaPorId = new Map();
   for (const row of boletimRows) {
-    if (
-      row.disciplinaId !== null &&
-      row.disciplinaId !== undefined &&
-      !disciplinaPorId.has(String(row.disciplinaId))
-    ) {
+    if (row.disciplinaId !== null && row.disciplinaId !== undefined && !disciplinaPorId.has(String(row.disciplinaId))) {
       disciplinaPorId.set(String(row.disciplinaId), row.nomeDisciplina);
     }
   }
@@ -2074,19 +1305,12 @@ function normalizeFrequenciaBimestre(bimestre, data) {
   let qtdPct = 0;
   const disciplinas = [];
   for (const row of rows) {
-    const f =
-      numberValue(row?.numeroFaltasBimestre ?? row?.faltas ?? row?.Faltas ?? row?.totalFaltas) || 0;
-    const p =
-      numberValue(row?.numeroPresencasBimestre ?? row?.presencas ?? row?.totalPresencas) || 0;
-    const pct = numberValue(
-      row?.porcentagemPresenca ?? row?.frequencia ?? row?.percentualFrequencia,
-    );
+    const f = numberValue(row?.numeroFaltasBimestre ?? row?.faltas ?? row?.Faltas ?? row?.totalFaltas) || 0;
+    const p = numberValue(row?.numeroPresencasBimestre ?? row?.presencas ?? row?.totalPresencas) || 0;
+    const pct = numberValue(row?.porcentagemPresenca ?? row?.frequencia ?? row?.percentualFrequencia);
     faltas += f;
     presencas += p;
-    if (pct !== null) {
-      somaPct += pct;
-      qtdPct += 1;
-    }
+    if (pct !== null) { somaPct += pct; qtdPct += 1; }
     disciplinas.push({
       nomeDisciplina: toTitleCase(row?.nomeDisciplina || "Disciplina"),
       faltas: f,
@@ -2096,8 +1320,7 @@ function normalizeFrequenciaBimestre(bimestre, data) {
   }
   const aulas = presencas + faltas;
   let frequencia = qtdPct ? Math.round((somaPct / qtdPct) * 10) / 10 : null;
-  if (frequencia === null && aulas > 0)
-    frequencia = Math.round(((aulas - faltas) / aulas) * 1000) / 10;
+  if (frequencia === null && aulas > 0) frequencia = Math.round(((aulas - faltas) / aulas) * 1000) / 10;
   return {
     descricaoBimestre: `${bimestre}º Bimestre`,
     bimestre,
@@ -2114,9 +1337,7 @@ async function handleFrequencia(request, url) {
   const ano = url.searchParams.get("ano") || "";
   const requested = url.searchParams.get("bimestre");
   const bimestres = requested ? [Number(requested) || 1] : [1, 2, 3, 4];
-  const results = await Promise.all(
-    bimestres.map((b) => fetchFrequenciaBimestre(cdUsuario, token, b, ano)),
-  );
+  const results = await Promise.all(bimestres.map((b) => fetchFrequenciaBimestre(cdUsuario, token, b, ano)));
   const list = [];
   results.forEach((res, index) => {
     const normalized = normalizeFrequenciaBimestre(bimestres[index], res.data);
@@ -2124,30 +1345,17 @@ async function handleFrequencia(request, url) {
   });
   const faltas = await fetchFaltas(cdUsuario, token);
   const total = faltas.total ?? list.reduce((acc, item) => acc + (item.faltas || 0), 0);
-  return jsonResponse({
-    ok: results.some((r) => r.ok),
-    data: list,
-    faltas: total,
-    faltasBimestreAtual: total,
-  });
+  return jsonResponse({ ok: results.some((r) => r.ok), data: list, faltas: total, faltasBimestreAtual: total });
 }
+
 
 async function handleResume(request) {
   const token2 = getEduApiKey(request);
   const token = request.headers.get("X-Token");
   const cdUsuarioCurto = request.headers.get("X-Cd-Usuario") || "";
   const apelido = request.headers.get("X-Task-User") || "";
-  if (!token2 || !token)
-    return jsonResponse({ ok: false, erro: "Sessão salva inválida ou expirada" }, 401);
-  return jsonResponse({
-    ok: true,
-    nome: apelido || "Aluno",
-    apelido,
-    token,
-    token2,
-    cdUsuarioCurto,
-    usuario: request.headers.get("X-Usuario") || "",
-  });
+  if (!token2 || !token) return jsonResponse({ ok: false, erro: "Sessão salva inválida ou expirada" }, 401);
+  return jsonResponse({ ok: true, nome: apelido || "Aluno", apelido, token, token2, cdUsuarioCurto, usuario: request.headers.get("X-Usuario") || "" });
 }
 
 async function handleStudentRooms(request) {
@@ -2155,21 +1363,10 @@ async function handleStudentRooms(request) {
   if (!token2) return jsonResponse({ erro: "Cabeçalho X-Token2 ausente" }, 400);
   try {
     const targets = await fetchEduspRoomTargets(token2);
-    const rooms = Array.from(
-      new Set(targets.map((target) => String(target || "").trim()).filter(Boolean)),
-    ).map((name, index) => ({ id: String(index), name, identifier: name }));
+    const rooms = Array.from(new Set(targets.map((target) => String(target || "").trim()).filter(Boolean))).map((name, index) => ({ id: String(index), name, identifier: name }));
     return jsonResponse({ ok: true, rooms, targets });
   } catch (error) {
-    return jsonResponse(
-      {
-        ok: false,
-        erro: "Não foi possível obter as salas do usuário.",
-        detalhe: String(error?.message || error),
-        rooms: [],
-        targets: [],
-      },
-      502,
-    );
+    return jsonResponse({ ok: false, erro: "Não foi possível obter as salas do usuário.", detalhe: String(error?.message || error), rooms: [], targets: [] }, 502);
   }
 }
 
@@ -2179,39 +1376,16 @@ async function handleTaskDetails(request, url) {
   const taskId = url.searchParams.get("task_id");
   const roomName = url.searchParams.get("room_name") || "";
   const captchaToken = request.headers.get("X-Captcha-Token") || "";
-  const captchaSessionKey =
-    request.headers.get("X-Captcha-Session") || url.searchParams.get("captcha_session") || "";
+  const captchaSessionKey = request.headers.get("X-Captcha-Session") || url.searchParams.get("captcha_session") || "";
   const captchaCookie = request.headers.get("X-Captcha-Cookie") || "";
   if (!taskId) return jsonResponse({ erro: "Parâmetro task_id ausente" }, 400);
   if (!captchaToken) return jsonResponse({ erro: "CAPTCHA_REQUIRED", captcha_required: true }, 428);
   try {
-    const result = await fetchTaskDetails(
-      token2,
-      taskId,
-      roomName,
-      captchaToken,
-      captchaSessionKey,
-      captchaCookie,
-    );
-    if (!result.resp.ok)
-      return jsonResponse(
-        {
-          erro: "Falha ao consultar a atividade",
-          upstream_status: result.resp.status,
-          upstream: result.data,
-        },
-        result.resp.status,
-      );
+    const result = await fetchTaskDetails(token2, taskId, roomName, captchaToken, captchaSessionKey, captchaCookie);
+    if (!result.resp.ok) return jsonResponse({ erro: "Falha ao consultar a atividade", upstream_status: result.resp.status, upstream: result.data }, result.resp.status);
     return jsonResponse(result.data, result.resp.status);
   } catch (error) {
-    return jsonResponse(
-      {
-        erro: "Falha ao consultar a atividade",
-        upstream_status: 502,
-        detalhe: String(error?.message || error),
-      },
-      502,
-    );
+    return jsonResponse({ erro: "Falha ao consultar a atividade", upstream_status: 502, detalhe: String(error?.message || error) }, 502);
   }
 }
 
@@ -2219,44 +1393,13 @@ async function handleAnswerTask(request) {
   const token2 = getEduApiKey(request);
   if (!token2) return jsonResponse({ erro: "Cabeçalho X-Token2 ausente" }, 400);
   let body;
-  try {
-    body = await request.json();
-  } catch {
-    return jsonResponse({ erro: "Corpo da requisição inválido" }, 400);
-  }
+  try { body = await request.json(); } catch { return jsonResponse({ erro: "Corpo da requisição inválido" }, 400); }
   const { task_id, room_name, answers, captcha_token, accessed_on, executed_on } = body || {};
   const captchaSessionKey = request.headers.get("X-Captcha-Session") || body?.captcha_session || "";
-  const answersIsValid =
-    answers &&
-    typeof answers === "object" &&
-    !Array.isArray(answers) &&
-    Object.keys(answers).length > 0;
-  if (!task_id || !answersIsValid)
-    return jsonResponse(
-      { erro: "Parâmetros task_id e answers (objeto question_id -> resposta) são obrigatórios" },
-      400,
-    );
-  const result = await submitTaskAnswers(
-    token2,
-    task_id,
-    room_name,
-    answers,
-    captcha_token || request.headers.get("X-Captcha-Token") || "",
-    accessed_on,
-    executed_on,
-    captchaSessionKey,
-    { duration: body?.duration ?? body?.time_spent, answerId: body?.answer_id },
-  );
-  return jsonResponse(
-    {
-      ok: result.resp.ok,
-      status: result.resp.status,
-      data: result.data,
-      endpoint: result.url,
-      attempts: result.attempts || [],
-    },
-    result.resp.status || 502,
-  );
+  const answersIsValid = answers && typeof answers === "object" && !Array.isArray(answers) && Object.keys(answers).length > 0;
+  if (!task_id || !answersIsValid) return jsonResponse({ erro: "Parâmetros task_id e answers (objeto question_id -> resposta) são obrigatórios" }, 400);
+  const result = await submitTaskAnswers(token2, task_id, room_name, answers, captcha_token || request.headers.get("X-Captcha-Token") || "", accessed_on, executed_on, captchaSessionKey, { duration: body?.duration ?? body?.time_spent, answerId: body?.answer_id });
+  return jsonResponse({ ok: result.resp.ok, status: result.resp.status, data: result.data, endpoint: result.url, attempts: result.attempts || [] }, result.resp.status || 502);
 }
 
 // Resposta provável direto da API: consulta as respostas já registradas
@@ -2265,11 +1408,7 @@ async function handleResolverTarefa(request) {
   const token2 = getEduApiKey(request);
   if (!token2) return jsonResponse({ ok: false, erro: "Cabeçalho X-Token2 ausente" }, 400);
   let body;
-  try {
-    body = await request.json();
-  } catch {
-    body = {};
-  }
+  try { body = await request.json(); } catch { body = {}; }
   const taskId = body?.task_id ?? body?.tarefa_id;
   if (!taskId) return jsonResponse({ ok: false, erro: "Parâmetro task_id é obrigatório" }, 400);
   const rascunho = body?.rascunho !== false;
@@ -2291,24 +1430,12 @@ async function handleResolverTarefa(request) {
   const attempts = [];
   const call = async (step, url, method, payload) => {
     try {
-      const resp = await fetch(url, {
-        method,
-        headers,
-        cache: "no-store",
-        ...(payload ? { body: JSON.stringify(payload) } : {}),
-      });
+      const resp = await fetch(url, { method, headers, cache: "no-store", ...(payload ? { body: JSON.stringify(payload) } : {}) });
       const data = await readJson(resp);
       attempts.push({ step, url, method, status: resp.status, ok: resp.ok });
       return { ok: resp.ok, status: resp.status, data };
     } catch (error) {
-      attempts.push({
-        step,
-        url,
-        method,
-        status: 0,
-        ok: false,
-        erro: String(error?.message || error),
-      });
+      attempts.push({ step, url, method, status: 0, ok: false, erro: String(error?.message || error) });
       return { ok: false, status: 0, data: null };
     }
   };
@@ -2321,283 +1448,17 @@ async function handleResolverTarefa(request) {
     answers: {},
   });
   // 2) Fallbacks: respostas já gravadas e o próprio conteúdo da tarefa
-  if (!result.ok)
-    result = await call(
-      "task-answer",
-      `${EDUSP_BASE}/tms/task/${taskId}/answer${nickQS}`,
-      "GET",
-      null,
-    );
+  if (!result.ok) result = await call("task-answer", `${EDUSP_BASE}/tms/task/${taskId}/answer${nickQS}`, "GET", null);
   if (!result.ok) {
     const roomQuery = roomName ? `&room_name=${encodeURIComponent(roomName)}` : "";
-    result = await call(
-      "apply",
-      `${EDUSP_BASE}/tms/task/${taskId}/apply?preview_mode=false&token_code=null${roomQuery}`,
-      "GET",
-      null,
-    );
+    result = await call("apply", `${EDUSP_BASE}/tms/task/${taskId}/apply?preview_mode=false&token_code=null${roomQuery}`, "GET", null);
   }
 
   const payload = result.data;
   const record = Array.isArray(payload) ? payload[payload.length - 1] : payload;
-  const answers =
-    record && typeof record === "object" && record.answers && typeof record.answers === "object"
-      ? record.answers
-      : null;
+  const answers = (record && typeof record === "object" && record.answers && typeof record.answers === "object") ? record.answers : null;
 
-  return jsonResponse(
-    { ok: Boolean(result.ok && answers), status: result.status, answers, data: payload, attempts },
-    200,
-  );
-}
-
-// =======================================================
-// LEIASP — integração nativa no mesmo Worker do EduX
-// =======================================================
-function leiaspSession(request) {
-  const tokenSed = String(request.headers.get("X-Token") || "").trim();
-  const tokenEdusp = String(request.headers.get("X-Token2") || "").trim();
-  const cdUsuario = String(request.headers.get("X-Cd-Usuario") || "").trim();
-  const sfSid = extractCookieValue(request.headers.get("Cookie"), "sf_sid");
-  if (!tokenSed && !tokenEdusp && !sfSid) return null;
-  return { tokenSed, tokenEdusp, cdUsuario, sfSid };
-}
-
-async function leiaspAuth(tokenSed, tokenEdusp = "", sfSid = "") {
-  // A tela de login mantém o token SED como fallback quando o ip.tv está
-  // temporariamente indisponível. Antes de abrir o LeiaSP, tente renovar o
-  // token EdUSP para não reutilizar esse fallback antigo.
-  let refreshedEduspToken = "";
-  if (String(tokenSed || "").trim()) {
-    try {
-      const refreshed = await exchangeEduspToken(String(tokenSed).trim());
-      if (refreshed.resp?.ok && refreshed.data?.auth_token) {
-        refreshedEduspToken = String(refreshed.data.auth_token).trim();
-      }
-    } catch {}
-  }
-  const candidates = [
-    ["edusp-renovado", refreshedEduspToken],
-    ["sed", tokenSed],
-    ["edusp", tokenEdusp],
-  ].filter(([, value]) => String(value || "").trim());
-  let lastStatus = 0;
-  let lastDetail = "";
-  let lastAttempt = "";
-  for (const [source, rawValue] of candidates) {
-    const candidate = String(rawValue).trim();
-    const authorizationVariants = [
-      ["bearer", { Authorization: `Bearer ${candidate}` }],
-      ["raw", { Authorization: candidate }],
-      ["x-token", { "X-Token": candidate }],
-    ];
-    for (const [authorizationType, authorizationHeader] of authorizationVariants) {
-      const headers = {
-        ...UPSTREAM_HEADERS,
-        Accept: "application/json, text/plain, */*",
-        "Accept-Language": "pt-BR,pt;q=0.9,en-US;q=0.8,en;q=0.7",
-        "X-Product-Name": "SalaDoFuturo",
-        "Ocp-Apim-Subscription-Key": LEIASP_APIM_KEY,
-        ...(sfSid ? { Cookie: `sf_sid=${sfSid}` } : {}),
-        "sec-ch-ua": '"Chromium";v="151", "Not_A Brand";v="99"',
-        "sec-ch-ua-mobile": "?0",
-        "sec-ch-ua-platform": '"Linux"',
-        ...authorizationHeader,
-      };
-      lastAttempt = `${source}/${authorizationType}`;
-      const tokenResp = await fetch(LEIASP_INTEGRATION_URL, {
-        method: "GET",
-        headers,
-        redirect: "manual",
-        cache: "no-store",
-      });
-      const tokenData = await readJson(tokenResp);
-      const jwt = String(tokenData?.data || "").trim();
-      lastStatus = tokenResp.status;
-      lastDetail =
-        tokenData?.message || tokenData?.error || tokenData?.erro || tokenData?.raw || "";
-      if (!tokenResp.ok || !jwt) continue;
-      const oauthResp = await fetch(`${ELEFANTE_OAUTH_BASE}?token=${encodeURIComponent(jwt)}`, {
-        headers: { ...UPSTREAM_HEADERS, Accept: "application/json" },
-        redirect: "manual",
-      });
-      let accessToken = "";
-      const location = oauthResp.headers.get("location") || "";
-      const encoded = location ? new URL(location).searchParams.get("t") : "";
-      if (encoded) {
-        try {
-          const bytes = Uint8Array.from(atob(encoded), (c) => c.charCodeAt(0));
-          const decoded = JSON.parse(new TextDecoder().decode(bytes));
-          accessToken = String(decoded?.access_token || "").trim();
-        } catch {}
-      }
-      if (!accessToken && oauthResp.ok) {
-        const oauthData = await readJson(oauthResp);
-        accessToken = String(oauthData?.access_token || oauthData?.token || "").trim();
-      }
-      if (!accessToken) {
-        lastStatus = oauthResp.status;
-        lastDetail = "OAuth não retornou access_token";
-        continue;
-      }
-      return {
-        Authorization: `Bearer ${accessToken}`,
-        ...UPSTREAM_HEADERS,
-        origin: "https://reader.elefanteletrado.com.br",
-        referer: "https://reader.elefanteletrado.com.br/",
-        "Content-Type": "application/json; charset=UTF-8",
-      };
-    }
-  }
-  throw new Error(
-    `Não foi possível abrir o LeiaSP (HTTP ${lastStatus || 401})${
-      lastDetail
-        ? `: ${String(lastDetail).slice(0, 240)}`
-        : `. Última tentativa: ${lastAttempt || "nenhuma"}. Verifique a sessão do EduX.`
-    }`,
-  );
-}
-
-function leiaspUrl(path) {
-  return `${ELEFANTE_STUDENT_API}${path}`;
-}
-
-function normalizeLeiaBook(book) {
-  const totalPages = Number(book?.NumberPages || 0);
-  const currentPage = Number(book?.Page || 0);
-  const rawPercent = Number(book?.ReadingPercent || 0);
-  const progress =
-    rawPercent > 0
-      ? rawPercent
-      : totalPages > 0 && currentPage > 0
-        ? Math.round((currentPage / totalPages) * 1000) / 10
-        : 0;
-  const cover =
-    book?.CoverPageUrl ||
-    book?.ThumbnailCoverPic ||
-    book?.CoverUrl ||
-    book?.CoverThumbnailUrl ||
-    book?.UrlToCoverImage ||
-    "";
-  const epub =
-    book?.EpubUrl || book?.UrlToEpubFile || book?.FullUrlToEpubFile || book?.EpubFilePath || "";
-  const coverUrl = cover.startsWith("/") ? `${ELEFANTE_CDN_BASE}${cover}` : cover;
-  const epubUrl = epub.startsWith("/") ? `${ELEFANTE_CDN_BASE}${epub}` : epub;
-  const authors = Array.isArray(book?.Authors)
-    ? book.Authors.join(", ")
-    : book?.AuthorStr || book?.Author || "Desconhecido";
-  return {
-    id: book?.Id || book?.BookId,
-    title: book?.BookTitle || book?.Title || "Sem título",
-    author: authors,
-    publisher: book?.Publisher || "",
-    total_pages: totalPages,
-    current_page: currentPage,
-    progress,
-    is_complete: Boolean(book?.IsReadCompleted || progress >= 100),
-    is_quiz_active: Boolean(book?.IsQuizActive),
-    cover_url: coverUrl,
-    epub_url: epubUrl,
-    level: book?.LevelName || book?.Level || book?.Genre || "Leitura",
-    genre: book?.Genre || "",
-    synopsis: book?.Synopsis || book?.Description || "",
-  };
-}
-
-async function leiaspBooksEndpoint(request) {
-  const session = leiaspSession(request);
-  if (!session) return jsonResponse({ erro: "Sessão do EduX ausente. Faça login novamente." }, 401);
-  try {
-    const headers = await leiaspAuth(session.tokenSed, session.tokenEdusp, session.sfSid);
-    const [discoverResp, readingsResp] = await Promise.all([
-      fetch(leiaspUrl("/v1/library/discover/"), { headers }),
-      fetch(leiaspUrl("/v1/library/book/readings"), { headers }),
-    ]);
-    const discover = discoverResp.ok ? await readJson(discoverResp) : [];
-    const readings = readingsResp.ok ? await readJson(readingsResp) : [];
-    const merged = new Map();
-    for (const book of [
-      ...(Array.isArray(discover) ? discover : []),
-      ...(Array.isArray(readings) ? readings : []),
-    ]) {
-      const id = book?.Id || book?.BookId;
-      if (!id) continue;
-      merged.set(String(id), { ...(merged.get(String(id)) || {}), ...book });
-    }
-    const books = [...merged.values()]
-      .map(normalizeLeiaBook)
-      .sort(
-        (a, b) =>
-          Number(a.is_complete) - Number(b.is_complete) ||
-          b.progress - a.progress ||
-          a.title.localeCompare(b.title),
-      );
-    return jsonResponse({ success: true, books, total: books.length });
-  } catch (error) {
-    return jsonResponse({ success: false, erro: String(error?.message || error) }, 502);
-  }
-}
-
-async function leiaspStudentEndpoint(request) {
-  const session = leiaspSession(request);
-  if (!session) return jsonResponse({ erro: "Sessão do EduX ausente. Faça login novamente." }, 401);
-  try {
-    const headers = await leiaspAuth(session.tokenSed, session.tokenEdusp, session.sfSid);
-    const resp = await fetch(leiaspUrl("/v1/student/stats"), { headers });
-    const stats = resp.ok ? await readJson(resp) : {};
-    return jsonResponse({ success: true, stats, cdUsuario: session.cdUsuario });
-  } catch (error) {
-    return jsonResponse({ success: false, erro: String(error?.message || error) }, 502);
-  }
-}
-
-async function leiaspReadEndpoint(request) {
-  const session = leiaspSession(request);
-  if (!session) return jsonResponse({ erro: "Sessão do EduX ausente. Faça login novamente." }, 401);
-  let body = {};
-  try {
-    body = await request.json();
-  } catch {}
-  const bookId = Number(body?.book_id || body?.bookId || 0);
-  if (!bookId) return jsonResponse({ erro: "Livro inválido." }, 400);
-  try {
-    const headers = await leiaspAuth(session.tokenSed, session.tokenEdusp, session.sfSid);
-    const bookResp = await fetch(leiaspUrl(`/v1/student/books/${bookId}`), { headers });
-    const book = bookResp.ok ? await readJson(bookResp) : {};
-    const totalPages = Number(book?.NumberPages || book?.TotalPages || body?.total_pages || 0);
-    const currentPage = Number(book?.Page || book?.CurrentPage || body?.current_page || 1);
-    await fetch(leiaspUrl(`/v1/highlights/get-highlights/${bookId}`), { headers });
-    await fetch(leiaspUrl(`/v1/bookmarks/get-bookmarks/${bookId}`), { headers });
-    const page = Math.max(1, Math.min(currentPage, totalPages || currentPage));
-    const cfi = `com.colibrio.epub.signature:${"0".repeat(40)}#epubcfi(/6/${page * 2}!/4/1:0)`;
-    const payload = {
-      CFI: cfi,
-      BookId: String(bookId),
-      TimeElapsed: 20,
-      ReadType: "Read",
-      Page: page,
-      IsComplete: false,
-      ReadDate: new Date().toLocaleDateString("pt-BR"),
-      PageCount: totalPages,
-      TimezoneOffset: 180,
-    };
-    const progressResp = await fetch(leiaspUrl(`/v1/student/books/${bookId}/progress_em/Read`), {
-      method: "POST",
-      headers,
-      body: JSON.stringify(payload),
-    });
-    return jsonResponse({
-      success: true,
-      started: true,
-      book_id: bookId,
-      current_page: page,
-      total_pages: totalPages,
-      progress_registered: progressResp.ok,
-      message: "Leitura iniciada no LeiaSP.",
-    });
-  } catch (error) {
-    return jsonResponse({ success: false, erro: String(error?.message || error) }, 502);
-  }
+  return jsonResponse({ ok: Boolean(result.ok && answers), status: result.status, answers, data: payload, attempts }, 200);
 }
 
 // =======================================================
@@ -2607,45 +1468,29 @@ export default {
   async fetch(request, env) {
     const url = new URL(request.url);
     const path = url.pathname.replace(/\/$/, "") || "/";
-    if (request.method === "OPTIONS")
-      return new Response(null, {
-        status: 204,
-        headers: { ...corsHeaders(), "Access-Control-Max-Age": "600", Vary: "Origin" },
-      });
+    if (request.method === "OPTIONS") return new Response(null, { status: 204, headers: { ...corsHeaders(), "Access-Control-Max-Age": "600", Vary: "Origin" } });
     try {
       if (path === "/login" && request.method === "POST") return handleLogin(request);
       if (path === "/resume" && request.method === "POST") return handleResume(request);
       if (path === "/dashboard") return handleDashboard(request);
       if (path === "/agenda" && request.method === "GET") return handleAgenda(request, url);
       if (path === "/boletim" && request.method === "GET") return handleBoletim(request, url);
-      if ((path === "/notas" || path === "/avaliacoes") && request.method === "GET")
-        return handleNotas(request, url);
-      if ((path === "/frequencia" || path === "/presenca") && request.method === "GET")
-        return handleFrequencia(request, url);
+      if ((path === "/notas" || path === "/avaliacoes") && request.method === "GET") return handleNotas(request, url);
+      if ((path === "/frequencia" || path === "/presenca") && request.method === "GET") return handleFrequencia(request, url);
       if (path === "/tarefas" && request.method === "GET") return handleDashboard(request);
-      if (path === "/captcha/challenge" && request.method === "POST")
-        return handleCaptchaChallenge(request);
-      if (path === "/captcha/verify" && request.method === "POST")
-        return handleCaptchaVerify(request);
+      if (path === "/captcha/challenge" && request.method === "POST") return handleCaptchaChallenge(request);
+      if (path === "/captcha/verify" && request.method === "POST") return handleCaptchaVerify(request);
       if (path === "/student-rooms" && request.method === "GET") return handleStudentRooms(request);
-      if (path === "/leiasp/books" && request.method === "GET") return leiaspBooksEndpoint(request);
-      if (path === "/leiasp/student" && request.method === "GET")
-        return leiaspStudentEndpoint(request);
-      if (path === "/leiasp/read" && request.method === "POST") return leiaspReadEndpoint(request);
       if (path === "/task-details") return handleTaskDetails(request, url);
       if (path === "/answer-task" && request.method === "POST") return handleAnswerTask(request);
       if (path === "/groq-chat" && request.method === "POST") return handleGroqChat(request, env);
       if (path === "/notifications" && request.method === "GET") return handleGetNotifications();
-      if (path === "/admin/notification" && request.method === "POST")
-        return handleSaveNotification(request);
-      if (path === "/admin/notification" && request.method === "PUT")
-        return handleEditNotification(request);
-      if (path === "/admin/notification" && request.method === "DELETE")
-        return handleDeleteNotification(request, url);
+      if (path === "/admin/notification" && request.method === "POST") return handleSaveNotification(request);
+      if (path === "/admin/notification" && request.method === "PUT") return handleEditNotification(request);
+      if (path === "/admin/notification" && request.method === "DELETE") return handleDeleteNotification(request, url);
       if (path === "/pdf-proxy" && request.method === "GET") return handlePdfProxy(request, url);
       if (path === "/groq-help" && request.method === "POST") return handleGroqHelp(request, env);
-      if (path === "/groq-research" && request.method === "POST")
-        return handleGroqResearch(request, env);
+      if (path === "/groq-research" && request.method === "POST") return handleGroqResearch(request, env);
       if (path === "/health") return jsonResponse({ ok: true, worker: "sdf", build: WORKER_BUILD });
       return jsonResponse({ erro: "Rota não encontrada" }, 404);
     } catch (error) {
