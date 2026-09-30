@@ -7,7 +7,6 @@ const SUBSCRIPTION_KEYS = {
 
 const EXTRA_TARGETS = ["1052", "1820", "764"];
 const EDUSP_BASE = "https://edusp-api.ip.tv";
-const TASKITOS_BASE = "https://taskitos.cupiditys.lol";
 const SED_BASE = "https://sedintegracoes.educacao.sp.gov.br";
 const LEIASP_INTEGRATION_URL = `${SED_BASE}/saladofuturobffapi/integracoes/Token?plataforma=LeiaSP+`;
 const LEIASP_APIM_KEY = "d701a2043aa24d7ebb37e9adf60d043b";
@@ -665,6 +664,8 @@ async function fetchTasksForTargets(token2, targets, options = {}) {
 
 async function fetchEduspRoomTargets(token2) {
   const targets = [];
+  let data = null;
+  let status = 0;
   try {
     const resp = await fetch(`${EDUSP_BASE}/room/user?list_all=true&with_cards=true`, {
       headers: {
@@ -675,8 +676,9 @@ async function fetchEduspRoomTargets(token2) {
         "x-api-key": token2,
       },
     });
-    if (!resp.ok) return targets;
-    const data = await readJson(resp);
+    status = resp.status;
+    data = await readJson(resp);
+    if (!resp.ok) return { targets, data, status };
     const eduspRooms = Array.isArray(data?.rooms) ? data.rooms : [];
     for (const room of eduspRooms) {
       addUnique(targets, room?.name);
@@ -684,7 +686,40 @@ async function fetchEduspRoomTargets(token2) {
       for (const cat of categories) addUnique(targets, cat?.id);
     }
   } catch {}
-  return targets;
+  return { targets, data, status };
+}
+
+async function fetchSurveyTodoCount(token2, roomData, nick, filterExpired) {
+  const params = new URLSearchParams();
+  const rooms = Array.isArray(roomData?.rooms) ? roomData.rooms : [];
+  for (const room of rooms) {
+    const name = String(room?.name || "").trim();
+    if (name) {
+      params.append("publication_target", name);
+      if (nick) params.append("publication_target", `${name}:${nick}`);
+    }
+    for (const category of Array.isArray(room?.group_categories) ? room.group_categories : []) {
+      if (category?.id !== undefined && category?.id !== null) params.append("publication_target", String(category.id));
+    }
+  }
+  params.set("filter_expired", filterExpired ? "true" : "false");
+  params.set("with_answer", "true");
+  params.set("answer_statuses", "draft");
+  const resp = await fetch(`${EDUSP_BASE}/survey/todo/count?${params.toString()}`, {
+    headers: {
+      ...UPSTREAM_HEADERS,
+      "content-type": "application/json",
+      "x-api-platform": "webclient",
+      "x-api-realm": "edusp",
+      "x-api-key": token2,
+    },
+  });
+  const data = await readJson(resp);
+  return {
+    resp,
+    data,
+    count: Number(data?.count ?? data?.data?.count ?? data?.total ?? data?.data?.total ?? 0) || 0,
+  };
 }
 
 async function fetchTasks(token2, rooms, username) {
@@ -692,12 +727,15 @@ async function fetchTasks(token2, rooms, username) {
   // apenas os alvos reais do aluno, filtro draft e sem expiradas. A API inclui
   // nesse filtro as tarefas ainda não iniciadas, cujo answer_status vem nulo.
   const baseTargets = [];
-  for (const target of await fetchEduspRoomTargets(token2)) addUnique(baseTargets, target);
+  const roomResult = await fetchEduspRoomTargets(token2);
+  for (const target of roomResult.targets) addUnique(baseTargets, target);
   for (const room of rooms) {
     if (!room.name) continue;
     addUnique(baseTargets, room.name);
   }
   if (username) {
+    const roomNames = (roomResult.data?.rooms || []).map((room) => room?.name).filter(Boolean);
+    for (const target of roomNames) addUnique(baseTargets, `${target}:${username}`);
     for (const target of [...baseTargets]) addUnique(baseTargets, `${target}:${username}-sp`);
     addUnique(baseTargets, `${username}-sp`);
   }
@@ -706,16 +744,20 @@ async function fetchTasks(token2, rooms, username) {
   let lastData = null;
   const rawTasks = [];
 
-  try {
-    const result = await fetchTasksForTargets(token2, baseTargets, {
-      statuses: ["draft"],
-      filterExpired: true,
-      expiredOnly: false,
-    });
-    lastResp = result.resp;
-    lastData = result.data;
-    if (result.resp?.ok) rawTasks.push(...extractTasks(result.data));
-  } catch {}
+  const queryAttempts = [
+    { statuses: false, filterExpired: true, expiredOnly: false },
+    { statuses: ["draft"], filterExpired: true, expiredOnly: false },
+    { statuses: ["draft"], filterExpired: false, expiredOnly: true },
+  ];
+  for (const options of queryAttempts) {
+    try {
+      const result = await fetchTasksForTargets(token2, baseTargets, options);
+      lastResp = result.resp;
+      lastData = result.data;
+      if (result.resp?.ok) rawTasks.push(...extractTasks(result.data));
+      if (rawTasks.length) break;
+    } catch {}
+  }
 
   const seen = new Set();
   const tasks = [];
@@ -739,6 +781,8 @@ async function fetchTasks(token2, rooms, username) {
     tasks,
     targets: baseTargets,
     raw: lastData,
+    roomData: roomResult.data,
+    roomTargetsStatus: roomResult.status,
   };
 }
 
@@ -1134,33 +1178,23 @@ async function submitTaskAnswers(
   const answerId =
     lesson?.answer_id ?? lesson?.answerId ?? lesson?.answer?.id ?? options.answerId ?? null;
 
-  // Conclusão direta conforme do_complete_task: não cria nem atualiza rascunho.
+  // Envia a resposta diretamente para a API oficial EduSP.
   const completion = await call(
-    "complete-direct",
-    `${TASKITOS_BASE}/api/complete`,
+    "tms-answer",
+    `${EDUSP_BASE}/tms/answer`,
     "POST",
     {
-      x_auth_key: token2,
-      room_code: target,
-      lesson_id: taskId,
-      draft: false,
-      lesson_info: lesson,
-      time_spent: duration,
-      answer_id: answerId || 0,
-      target_score: 100,
-      captchaToken,
+      task_id: String(taskId),
+      status: "submitted",
       answers: normalizedAnswers,
+      duration,
+      answer_id: answerId || null,
+      publication_target: target,
       accessed_on: accessedOn || "room",
       executed_on: executedOn || target,
+      captcha_token: captchaToken || null,
     },
-    {
-      Accept: "*/*",
-      "Accept-Language": "pt-BR,pt;q=0.7",
-      "Content-Type": "application/json",
-      Origin: TASKITOS_BASE,
-      Referer: `${TASKITOS_BASE}/`,
-      "User-Agent": UPSTREAM_HEADERS["User-Agent"],
-    },
+    submitHeaders,
   );
 
   return {
@@ -1715,23 +1749,26 @@ async function handleDashboard(request) {
     }
   }
   const taskResult = await fetchTasks(currentTaskToken, rooms, username);
+  const surveyPending = await fetchSurveyTodoCount(currentTaskToken, taskResult.roomData, username, true).catch(() => ({ resp: { ok: false, status: 502 }, count: 0 }));
   const aluno = alunoResult.data;
   const alunoData = aluno?.data && typeof aluno.data === "object" ? aluno.data : aluno;
   return jsonResponse({
     aluno: alunoData || {},
     turmas: rooms,
     tarefas: taskResult.tasks,
-    pendencias: taskResult.tasks.filter((t) => t.status === "pending").length,
+    pendencias: surveyPending.count || taskResult.tasks.filter((t) => t.status === "pending").length,
 
     faltas: faltasResult.total,
     mensagensNaoLidas: notificationsResult.unread,
     mensagens: notificationsResult.total,
     targets: taskResult.targets,
-    tarefasApiOk: taskResult.ok,
-    tarefasApiStatus: taskResult.status,
+    tarefasApiOk: taskResult.ok || surveyPending.resp.ok,
+    tarefasApiStatus: taskResult.status || surveyPending.resp.status,
     agenda: agendaResult.ok ? agendaResult.events : [],
     meta: {
       turmasApiOk: roomsResult.resp.ok,
+      roomTargetsStatus: taskResult.roomTargetsStatus || 0,
+      surveyTodoStatus: surveyPending.resp.status || 0,
       faltasApiOk: faltasResult.resp.ok,
       notificationsApiOk: notificationsResult.ok,
       alunoApiOk: !!alunoResult.resp?.ok,
