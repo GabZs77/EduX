@@ -687,6 +687,35 @@ async function fetchTasksForTargets(token2, targets, options = {}) {
   return { resp, data: await readJson(resp) };
 }
 
+async function fetchPendingAnswers(token2, targets, nick) {
+  const params = new URLSearchParams();
+  params.set("limit", "100");
+  params.set("offset", "0");
+  params.set("task_is_exam", "false");
+  params.set("task_is_essay", "false");
+  params.set("status", "pending");
+  params.set("order", "asc");
+  params.set("order_by", "task_id");
+  params.set("with_apply_moment", "true");
+  if (nick) params.set("nick", nick.endsWith("-sp") ? nick : `${nick}-sp`);
+  for (const target of targets || []) params.append("publication_target", target);
+  for (const field of [
+    "id", "status", "task_id", "publication_target", "created_at", "updated_at",
+    "answers", "duration", "delivered_at", "task.title", "task.description",
+    "task.publish_at", "task.expire_at", "task.publication_target",
+  ]) params.append("fields", field);
+  const resp = await fetch(`${EDUSP_BASE}/tms/answer?${params.toString()}`, {
+    headers: {
+      ...UPSTREAM_HEADERS,
+      "content-type": "application/json",
+      "x-api-platform": "webclient",
+      "x-api-realm": "edusp",
+      "x-api-key": token2,
+    },
+  });
+  return { resp, data: await readJson(resp) };
+}
+
 async function fetchEduspRoomTargets(token2) {
   const targets = [];
   let data = null;
@@ -786,6 +815,17 @@ async function fetchTasks(token2, rooms, username) {
       lastData = result.data;
       if (result.resp?.ok) rawTasks.push(...extractTasks(result.data));
       if (rawTasks.length) break;
+    } catch {}
+  }
+  if (!rawTasks.length) {
+    try {
+      const answerResult = await fetchPendingAnswers(token2, baseTargets, username);
+      lastResp = answerResult.resp;
+      lastData = answerResult.data;
+      for (const answer of extractTasks(answerResult.data)) {
+        const nestedTask = answer?.task && typeof answer.task === "object" ? answer.task : {};
+        rawTasks.push({ ...nestedTask, ...answer, answer_status: answer?.status || "draft" });
+      }
     } catch {}
   }
 
