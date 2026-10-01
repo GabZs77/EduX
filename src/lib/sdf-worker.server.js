@@ -366,11 +366,27 @@ async function handleCaptchaVerify(request) {
 // FUNÇÕES DE API (SED/EDUSP)
 // =======================================================
 async function fetchTurmas(cdUsuarioCurto, token) {
-  const { resp, data } = await sedGet(
-    `apihubintegracoes/api/v2/Turma/ListarTurmasPorAluno?codigoAluno=${encodeURIComponent(cdUsuarioCurto)}`,
-    { subKey: SUBSCRIPTION_KEYS.hub, token },
-  );
-  return { resp, data, rooms: unwrapSedList(data).map(normalizeRoom) };
+  const [turmasResult, disciplinasResult] = await Promise.all([
+    sedGet(
+      `apihubintegracoes/api/v2/Turma/ListarTurmasPorAluno?codigoAluno=${encodeURIComponent(cdUsuarioCurto)}`,
+      { subKey: SUBSCRIPTION_KEYS.hub, token },
+    ),
+    sedGet(
+      `apihubintegracoes/api/v2/Disciplina/ListarDisciplinaPorAluno?codigoAluno=${encodeURIComponent(cdUsuarioCurto)}`,
+      { subKey: SUBSCRIPTION_KEYS.login, token },
+    ),
+  ]);
+  const unique = new Map();
+  for (const item of [...unwrapSedList(turmasResult.data), ...unwrapSedList(disciplinasResult.data)]) {
+    const room = normalizeRoom(item);
+    const key = String(room.id ?? room.numeroClasse ?? room.name).trim();
+    if (key && !unique.has(key)) unique.set(key, room);
+  }
+  return {
+    resp: turmasResult.resp.ok ? turmasResult.resp : disciplinasResult.resp,
+    data: turmasResult.resp.ok ? turmasResult.data : disciplinasResult.data,
+    rooms: [...unique.values()],
+  };
 }
 
 async function fetchTasksForTargets(token2, targets, options = {}) {
@@ -394,20 +410,33 @@ async function fetchTasksForTargets(token2, targets, options = {}) {
 async function fetchEduspRoomTargets(token2) {
   const roomNames = [];
   const categoryIds = [];
+  let roomData = null;
+  let roomStatus = 0;
   try {
     const resp = await fetch(`${EDUSP_BASE}/room/user?list_all=true&with_cards=true`, {
       headers: { ...UPSTREAM_HEADERS, "content-type": "application/json", "x-api-platform": "webclient", "x-api-realm": "edusp", "x-api-key": token2 },
     });
-    if (!resp.ok) return { roomNames, categoryIds };
+    roomStatus = resp.status;
     const data = await readJson(resp);
-    const eduspRooms = Array.isArray(data?.rooms) ? data.rooms : [];
+    roomData = data;
+    if (!resp.ok) return { roomNames, categoryIds, roomData, roomStatus };
+    const eduspRooms = extractRooms(data);
     for (const room of eduspRooms) {
       addUnique(roomNames, room?.name);
       const categories = Array.isArray(room?.group_categories) ? room.group_categories : [];
       for (const cat of categories) addUnique(categoryIds, cat?.id);
     }
   } catch {}
-  return { roomNames, categoryIds };
+  return { roomNames, categoryIds, roomData, roomStatus };
+}
+
+function extractRooms(data) {
+  if (Array.isArray(data?.rooms)) return data.rooms;
+  for (const value of [data?.data, data?.result, data?.payload, data?.response]) {
+    if (Array.isArray(value?.rooms)) return value.rooms;
+    if (Array.isArray(value)) return value;
+  }
+  return [];
 }
 
 async function fetchTasks(token2, rooms, username) {
@@ -445,6 +474,17 @@ async function fetchTasks(token2, rooms, username) {
     lastResp = result.resp; lastData = result.data;
     if (result.resp?.ok) rawTasks.push(...extractTasks(result.data));
   } catch {}
+  if (!rawTasks.length) {
+    try {
+      const result = await fetchTasksForTargets(token2, baseTargets, {
+        statuses: false,
+        filterExpired: true,
+        expiredOnly: false,
+      });
+      lastResp = result.resp; lastData = result.data;
+      if (result.resp?.ok) rawTasks.push(...extractTasks(result.data));
+    } catch {}
+  }
 
   const seen = new Set();
   const tasks = [];
@@ -452,7 +492,7 @@ async function fetchTasks(token2, rooms, username) {
     const id = String(raw?.id ?? raw?.task_id ?? raw?.taskId ?? `${raw?.title}|${raw?.apply_moment ?? ""}`);
     if (seen.has(id)) continue;
     seen.add(id);
-    const task = normalizeTask(raw, findRoomForTask(raw, rooms));
+    const task = normalizeTask(raw, findRoomForTask(raw, rooms, eduspTargets.roomData));
     // Somente tarefas pendentes: entregues e expiradas ficam de fora.
     if (task.status !== "pending") continue;
     const answered = raw?.answer_status ?? raw?.answerStatus ?? null;
@@ -460,12 +500,27 @@ async function fetchTasks(token2, rooms, username) {
     tasks.push(task);
   }
   tasks.sort((a, b) => (Date.parse(a.due || "") || 0) - (Date.parse(b.due || "") || 0));
-  return { ok: lastResp ? Boolean(lastResp.ok) : true, status: lastResp?.status ?? 200, tasks, targets: baseTargets, raw: lastData };
+  return {
+    ok: lastResp ? Boolean(lastResp.ok) : true,
+    status: lastResp?.status ?? 200,
+    tasks,
+    rawTaskCount: rawTasks.length,
+    targets: baseTargets,
+    raw: lastData,
+    roomData: eduspTargets.roomData,
+    roomTargetsStatus: eduspTargets.roomStatus,
+  };
 }
 
 
 
-function findRoomForTask(task, rooms) {
+function findRoomForTask(task, rooms, eduspRoomData = null) {
+  const target = taskRoomTarget(task, "").toLowerCase();
+  for (const room of extractRooms(eduspRoomData)) {
+    const name = String(room?.name || "").trim();
+    const values = [name, ...(room?.group_categories || []).map((category) => category?.id)];
+    if (name && values.some((value) => String(value || "").trim().toLowerCase() === target)) return name;
+  }
   const text = JSON.stringify(task || "").toLowerCase();
   for (const room of rooms) {
     if (room.name && text.includes(room.name.toLowerCase())) return room.name;
@@ -1157,16 +1212,32 @@ async function handleDashboard(request) {
   }
   taskNick = taskNick || jwtNick(currentTaskToken) || username;
   const taskResult = await fetchTasks(currentTaskToken, rooms, taskNick);
+  const eduspRooms = extractRooms(taskResult.roomData);
+  const turmasIdentificadas = Array.from(new Set([
+    ...rooms.map((room) => room?.name).filter(Boolean),
+    ...eduspRooms.map((room) => room?.name).filter(Boolean),
+  ]));
   const aluno = alunoResult.data;
   const alunoData = aluno?.data && typeof aluno.data === "object" ? aluno.data : aluno;
   return jsonResponse({
-    aluno: alunoData || {}, turmas: rooms, tarefas: taskResult.tasks,
+    aluno: alunoData || {}, turmas: rooms, turmasIdentificadas, tarefas: taskResult.tasks,
     pendencias: taskResult.tasks.filter((t) => t.status === "pending").length,
 
     faltas: faltasResult.total, mensagensNaoLidas: notificationsResult.unread, mensagens: notificationsResult.total,
     targets: taskResult.targets, tarefasApiOk: taskResult.ok, tarefasApiStatus: taskResult.status,
     agenda: agendaResult.ok ? agendaResult.events : [],
-    meta: { turmasApiOk: roomsResult.resp.ok, faltasApiOk: faltasResult.resp.ok, notificationsApiOk: notificationsResult.ok, alunoApiOk: !!alunoResult.resp?.ok, agendaApiOk: !!agendaResult.ok },
+    meta: {
+      turmasApiOk: roomsResult.resp.ok,
+      roomTargetsStatus: taskResult.roomTargetsStatus || 0,
+      roomTargetCount: taskResult.targets.length,
+      eduspRoomCount: eduspRooms.length,
+      taskRawCount: taskResult.rawTaskCount || 0,
+      taskReturnedCount: taskResult.tasks.length,
+      faltasApiOk: faltasResult.resp.ok,
+      notificationsApiOk: notificationsResult.ok,
+      alunoApiOk: !!alunoResult.resp?.ok,
+      agendaApiOk: !!agendaResult.ok,
+    },
   });
 }
 
