@@ -408,10 +408,23 @@ async function fetchTasksForTargets(token2, targets, options = {}) {
   }
   params.set("with_apply_moment", "true");
   for (const target of targets || []) params.append("publication_target", target);
-  const resp = await fetch(`${EDUSP_BASE}/tms/task/todo?${params.toString()}`, {
-    headers: { ...UPSTREAM_HEADERS, "content-type": "application/json", "x-api-platform": "webclient", "x-api-realm": "edusp", "x-api-key": token2 },
-  });
-  return { resp, data: await readJson(resp) };
+  const url = `${EDUSP_BASE}/tms/task/todo?${params.toString()}`;
+  const headerVariants = [
+    { ...UPSTREAM_HEADERS, "content-type": "application/json", "x-api-platform": "webclient", "x-api-realm": "edusp", "x-api-key": token2 },
+    { Accept: "application/json", "x-api-platform": "webclient", "x-api-realm": "edusp", "x-api-key": token2 },
+  ];
+  let last = { resp: { ok: false, status: 502 }, data: { erro: "Falha ao consultar tarefas" } };
+  for (const headers of headerVariants) {
+    try {
+      const resp = await fetch(url, { headers });
+      const data = await readJson(resp);
+      last = { resp, data };
+      if (resp.ok || ![401, 403, 429, 500, 502, 503, 504].includes(resp.status)) return last;
+    } catch (error) {
+      last = { resp: { ok: false, status: 502 }, data: { erro: String(error?.message || error) } };
+    }
+  }
+  return last;
 }
 
 async function fetchEduspRoomTargets(token2) {
@@ -420,13 +433,21 @@ async function fetchEduspRoomTargets(token2) {
   let roomData = null;
   let roomStatus = 0;
   try {
-    const resp = await fetch(`${EDUSP_BASE}/room/user?list_all=true&with_cards=true`, {
-      headers: { ...UPSTREAM_HEADERS, "content-type": "application/json", "x-api-platform": "webclient", "x-api-realm": "edusp", "x-api-key": token2 },
-    });
-    roomStatus = resp.status;
-    const data = await readJson(resp);
-    roomData = data;
-    if (!resp.ok) return { roomNames, categoryIds, roomData, roomStatus };
+    const roomUrl = `${EDUSP_BASE}/room/user?list_all=true&with_cards=true`;
+    const roomHeaders = [
+      { ...UPSTREAM_HEADERS, "content-type": "application/json", "x-api-platform": "webclient", "x-api-realm": "edusp", "x-api-key": token2 },
+      { Accept: "application/json", "x-api-platform": "webclient", "x-api-realm": "edusp", "x-api-key": token2 },
+    ];
+    let resp = null;
+    let data = null;
+    for (const headers of roomHeaders) {
+      resp = await fetch(roomUrl, { headers });
+      data = await readJson(resp);
+      roomStatus = resp.status;
+      roomData = data;
+      if (resp.ok || ![401, 403, 429, 500, 502, 503, 504].includes(resp.status)) break;
+    }
+    if (!resp?.ok) return { roomNames, categoryIds, roomData, roomStatus };
     const eduspRooms = extractRooms(data);
     for (const room of eduspRooms) {
       addUnique(roomNames, room?.name);
@@ -447,14 +468,9 @@ function extractRooms(data) {
 }
 
 async function fetchTasks(token2, rooms, username) {
-  // Mesma consulta que a plataforma original faz na aba "A Fazer":
-  // salas, salas personalizadas e categorias numéricas, nesta ordem. Categorias
-  // não aceitam o sufixo do aluno; enviá-lo nelas pode invalidar a consulta toda.
   const baseTargets = [];
   const eduspTargets = await fetchEduspRoomTargets(token2);
   const roomTargets = [...eduspTargets.roomNames];
-  // A lista SED usa nomes de exibição, não publication_target. Ela só serve de
-  // fallback caso o endpoint de salas do EduSP esteja temporariamente vazio.
   if (!roomTargets.length) {
     for (const room of rooms) {
       const candidate = String(room?.identificador || room?.name || "").trim();
@@ -468,51 +484,46 @@ async function fetchTasks(token2, rooms, username) {
   }
   for (const categoryId of eduspTargets.categoryIds) addUnique(baseTargets, categoryId);
 
+  const rawTasks = [];
   let lastResp = null;
   let lastData = null;
-  const rawTasks = [];
-
-  try {
-    const result = await fetchTasksForTargets(token2, baseTargets, {
-      statuses: ["draft", "pending"],
-      isEssay: true,
-      filterExpired: true,
-      expiredOnly: false,
-    });
-    lastResp = result.resp; lastData = result.data;
-    if (result.resp?.ok) rawTasks.push(...extractTasks(result.data));
-  } catch {}
-  if (!rawTasks.length) {
-    try {
-      const result = await fetchTasksForTargets(token2, baseTargets, {
-        statuses: false,
-        isEssay: true,
-        filterExpired: true,
-        expiredOnly: false,
-      });
-      lastResp = result.resp; lastData = result.data;
-      if (result.resp?.ok) rawTasks.push(...extractTasks(result.data));
-    } catch {}
+  let anySuccess = false;
+  // The API uses is_essay as a type selector. Query both types: filtering the
+  // response to essays was the regression that made ordinary pending tasks disappear.
+  for (const isEssay of [false, true]) {
+    let result = null;
+    for (const options of [
+      { statuses: ["draft", "pending"], isEssay, filterExpired: true, expiredOnly: false },
+      { statuses: false, isEssay, filterExpired: true, expiredOnly: false },
+      { statuses: false, isEssay, filterExpired: false, expiredOnly: false },
+    ]) {
+      try {
+        result = await fetchTasksForTargets(token2, baseTargets, options);
+        lastResp = result.resp; lastData = result.data;
+        if (result.resp?.ok) {
+          anySuccess = true;
+          rawTasks.push(...extractTasks(result.data));
+          if (extractTasks(result.data).length) break;
+        }
+      } catch {}
+    }
   }
-
   const seen = new Set();
   const tasks = [];
   for (const raw of rawTasks) {
     const id = String(raw?.id ?? raw?.task_id ?? raw?.taskId ?? `${raw?.title}|${raw?.apply_moment ?? ""}`);
     if (seen.has(id)) continue;
     seen.add(id);
-    if (raw?.is_essay !== true) continue;
     const task = normalizeTask(raw, findRoomForTask(raw, rooms, eduspTargets.roomData));
-    // Somente tarefas pendentes: entregues e expiradas ficam de fora.
+    const rawStatus = raw?.answer_status ?? raw?.answerStatus ?? null;
     if (task.status !== "pending") continue;
-    const answered = raw?.answer_status ?? raw?.answerStatus ?? null;
-    if (answered && !["pending", "draft"].includes(String(answered).toLowerCase())) continue;
-    tasks.push(task);
+    if (rawStatus && !["pending", "draft"].includes(String(rawStatus).toLowerCase())) continue;
+    tasks.push({ ...task, kind: raw?.is_essay === true ? "redacao" : "tarefa" });
   }
   tasks.sort((a, b) => (Date.parse(a.due || "") || 0) - (Date.parse(b.due || "") || 0));
   return {
-    ok: lastResp ? Boolean(lastResp.ok) : true,
-    status: lastResp?.status ?? 200,
+    ok: anySuccess || (lastResp ? Boolean(lastResp.ok) : true),
+    status: anySuccess ? 200 : (lastResp?.status ?? 200),
     tasks,
     rawTaskCount: rawTasks.length,
     targets: baseTargets,
@@ -521,9 +532,6 @@ async function fetchTasks(token2, rooms, username) {
     roomTargetsStatus: eduspTargets.roomStatus,
   };
 }
-
-
-
 function findRoomForTask(task, rooms, eduspRoomData = null) {
   const target = taskRoomTarget(task, "").toLowerCase();
   for (const room of extractRooms(eduspRoomData)) {
@@ -1231,8 +1239,8 @@ async function handleDashboard(request) {
   const alunoData = aluno?.data && typeof aluno.data === "object" ? aluno.data : aluno;
   return jsonResponse({
     aluno: alunoData || {}, turmas: rooms, turmasIdentificadas,
-    redacoes: taskResult.tasks,
-    tarefas: taskResult.tasks,
+    redacoes: taskResult.tasks.filter((t) => t.kind === "redacao"),
+    tarefas: taskResult.tasks.filter((t) => t.kind !== "redacao"),
     pendencias: taskResult.tasks.filter((t) => t.status === "pending").length,
 
     faltas: faltasResult.total, mensagensNaoLidas: notificationsResult.unread, mensagens: notificationsResult.total,

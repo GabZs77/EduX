@@ -98,10 +98,19 @@
   }
 
   async function fetchRooms(apiKey) {
-    var resp = await originalFetch(EDUSP + "/room/user?list_all=true&with_cards=true", { headers: eduspHeaders(apiKey) });
-    if (!resp.ok) throw new Error("room/user " + resp.status);
-    var data = await resp.json();
-    return Array.isArray(data && data.rooms) ? data.rooms : [];
+    var url = EDUSP + "/room/user?list_all=true&with_cards=true";
+    var variants = [eduspHeaders(apiKey), { Accept: "application/json", "x-api-realm": "edusp", "x-api-platform": "webclient", "x-api-key": apiKey }];
+    var lastStatus = 502;
+    for (var i = 0; i < variants.length; i++) {
+      var resp = await originalFetch(url, { headers: variants[i] });
+      lastStatus = resp.status;
+      if (resp.ok) {
+        var data = await resp.json();
+        return Array.isArray(data && data.rooms) ? data.rooms : [];
+      }
+      if (![401, 403, 429, 500, 502, 503, 504].includes(resp.status)) break;
+    }
+    throw new Error("room/user " + lastStatus);
   }
 
   function buildTargets(rooms, nick) {
@@ -124,21 +133,13 @@
 
   async function fetchTodo(apiKey, targets, opts) {
     var p = new URLSearchParams();
-    p.set("expired_only", "false");
-    p.set("limit", "100");
-    p.set("offset", "0");
-    p.set("filter_expired", "true");
-    p.set("is_exam", "false");
-    p.set("with_answer", "true");
-    p.set("is_essay", "true");
-    p.set("exclude_category_id", "748331");
-    if (!(opts && opts.noTargets)) {
-      targets.forEach(function (t) { p.append("publication_target", t); });
-    }
+    p.set("expired_only", "false"); p.set("limit", "100"); p.set("offset", "0");
+    p.set("filter_expired", "true"); p.set("is_exam", "false"); p.set("with_answer", "true");
+    p.set("is_essay", opts && opts.isEssay ? "true" : "false");
+    if (opts && opts.isEssay) p.set("exclude_category_id", "748331");
+    if (!(opts && opts.noTargets)) targets.forEach(function (t) { p.append("publication_target", t); });
     if (!(opts && (opts.noStatuses || opts.ignoreStatuses))) {
-      // Filtro documentado da plataforma oficial para redações.
-      p.append("answer_statuses", "draft");
-      p.append("answer_statuses", "pending");
+      p.append("answer_statuses", "draft"); p.append("answer_statuses", "pending");
     }
     p.set("with_apply_moment", "true");
     var resp = await originalFetch(EDUSP + "/tms/task/todo?" + p.toString(), { headers: eduspHeaders(apiKey) });
@@ -149,8 +150,6 @@
     if (data && Array.isArray(data.data)) return data.data;
     return [];
   }
-
-
   function normalize(raw, roomTopics) {
     var answer = raw.answer_status == null ? null : String(raw.answer_status).toLowerCase();
     var target = String(raw.publication_target || "").split(":")[0];
@@ -180,29 +179,26 @@
     var targets = buildTargets(rooms, creds.nick);
     var raws = [];
     var erro = "";
-    try {
-      raws = await fetchTodo(creds.apiKey, targets);
-      if (!raws.length) raws = await fetchTodo(creds.apiKey, targets, { ignoreStatuses: true });
-      if (!raws.length) raws = await fetchTodo(creds.apiKey, targets, { noStatuses: true });
-      if (!raws.length) raws = await fetchTodo(creds.apiKey, targets, { noStatuses: true, noTargets: true });
-    } catch (e1) {
-      erro = "tms/task/todo falhou: " + (e1 && e1.message ? e1.message : e1);
+    for (var essayMode = 0; essayMode < 2; essayMode++) {
+      var found = [];
       try {
-        raws = await fetchTodo(creds.apiKey, targets, { noStatuses: true });
-        erro = "";
-      } catch (e2) {
-        erro = "tms/task/todo falhou: " + (e2 && e2.message ? e2.message : e2);
+        found = await fetchTodo(creds.apiKey, targets, { isEssay: essayMode === 1 });
+        if (!found.length) found = await fetchTodo(creds.apiKey, targets, { isEssay: essayMode === 1, noStatuses: true });
+        if (!found.length) found = await fetchTodo(creds.apiKey, targets, { isEssay: essayMode === 1, noStatuses: true, noTargets: true });
+      } catch (e1) {
+        erro = "tms/task/todo falhou: " + (e1 && e1.message ? e1.message : e1);
       }
+      raws = raws.concat(found);
     }
     var topics = {};
     rooms.forEach(function (r) { if (r && r.name) topics[r.name] = r.topic || r.name; });
     var tasks = raws
       .filter(function (t) {
-        if (!t || t.task_expired || t.is_essay !== true) return false;
+        if (!t || t.task_expired) return false;
         var a = t.answer_status == null ? null : String(t.answer_status).toLowerCase();
         return a === null || a === "draft" || a === "pending";
       })
-      .map(function (t) { return normalize(t, topics); });
+      .map(function (t) { var item = normalize(t, topics); item.kind = t.is_essay === true ? "redacao" : "tarefa"; return item; });
     tasks.sort(function (a, b) { return (Date.parse(a.due || "") || 0) - (Date.parse(b.due || "") || 0); });
     return { tasks: tasks, targets: targets, rooms: rooms, erro: erro };
   }
@@ -327,8 +323,8 @@
         seen[id] = true;
         merged.push(t);
       });
-      data.redacoes = merged;
-      data.tarefas = merged;
+      data.redacoes = merged.filter(function (t) { return t.kind === "redacao"; });
+      data.tarefas = merged.filter(function (t) { return t.kind !== "redacao"; });
       data.pendencias = merged.filter(function (t) { return t.status === "pending"; }).length;
       data.targets = browser.targets;
       data.tarefasErro = browser.erro || "";
