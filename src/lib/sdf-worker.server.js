@@ -395,7 +395,8 @@ async function fetchTasksForTargets(token2, targets, options = {}) {
   params.set("limit", "100"); params.set("offset", "0");
   params.set("filter_expired", options.filterExpired === false ? "false" : "true");
   params.set("is_exam", "false"); params.set("with_answer", "true");
-  params.set("is_essay", "false");
+  params.set("is_essay", options.isEssay ? "true" : "false");
+  if (options.isEssay) params.set("exclude_category_id", "748331");
   if (options.statuses !== false) {
     for (const status of options.statuses || ["draft", "pending"]) params.append("answer_statuses", status);
   }
@@ -467,7 +468,8 @@ async function fetchTasks(token2, rooms, username) {
 
   try {
     const result = await fetchTasksForTargets(token2, baseTargets, {
-      statuses: ["draft"],
+      statuses: ["draft", "pending"],
+      isEssay: true,
       filterExpired: true,
       expiredOnly: false,
     });
@@ -478,6 +480,7 @@ async function fetchTasks(token2, rooms, username) {
     try {
       const result = await fetchTasksForTargets(token2, baseTargets, {
         statuses: false,
+        isEssay: true,
         filterExpired: true,
         expiredOnly: false,
       });
@@ -492,6 +495,7 @@ async function fetchTasks(token2, rooms, username) {
     const id = String(raw?.id ?? raw?.task_id ?? raw?.taskId ?? `${raw?.title}|${raw?.apply_moment ?? ""}`);
     if (seen.has(id)) continue;
     seen.add(id);
+    if (raw?.is_essay !== true) continue;
     const task = normalizeTask(raw, findRoomForTask(raw, rooms, eduspTargets.roomData));
     // Somente tarefas pendentes: entregues e expiradas ficam de fora.
     if (task.status !== "pending") continue;
@@ -1220,7 +1224,9 @@ async function handleDashboard(request) {
   const aluno = alunoResult.data;
   const alunoData = aluno?.data && typeof aluno.data === "object" ? aluno.data : aluno;
   return jsonResponse({
-    aluno: alunoData || {}, turmas: rooms, turmasIdentificadas, tarefas: taskResult.tasks,
+    aluno: alunoData || {}, turmas: rooms, turmasIdentificadas,
+    redacoes: taskResult.tasks,
+    tarefas: taskResult.tasks,
     pendencias: taskResult.tasks.filter((t) => t.status === "pending").length,
 
     faltas: faltasResult.total, mensagensNaoLidas: notificationsResult.unread, mensagens: notificationsResult.total,
@@ -1549,6 +1555,7 @@ export default {
       if ((path === "/notas" || path === "/avaliacoes") && request.method === "GET") return handleNotas(request, url);
       if ((path === "/frequencia" || path === "/presenca") && request.method === "GET") return handleFrequencia(request, url);
       if (path === "/tarefas" && request.method === "GET") return handleDashboard(request);
+      if (path === "/redacoes" && request.method === "GET") return handleDashboard(request);
       if (path === "/captcha/challenge" && request.method === "POST") return handleCaptchaChallenge(request);
       if (path === "/captcha/verify" && request.method === "POST") return handleCaptchaVerify(request);
       if (path === "/student-rooms" && request.method === "GET") return handleStudentRooms(request);

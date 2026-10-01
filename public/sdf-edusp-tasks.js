@@ -1,5 +1,5 @@
 /*
- * Tarefas "A Fazer" consultadas direto do navegador do aluno.
+ * Redações pendentes consultadas direto do navegador do aluno.
  *
  * A API de tarefas (edusp-api.ip.tv) libera CORS para qualquer origem, mas
  * bloqueia com frequência servidores de hospedagem (Cloudflare 403). A
@@ -126,13 +126,15 @@
     p.set("filter_expired", "true");
     p.set("is_exam", "false");
     p.set("with_answer", "true");
-    p.set("is_essay", "false");
+    p.set("is_essay", "true");
+    p.set("exclude_category_id", "748331");
     if (!(opts && opts.noTargets)) {
       targets.forEach(function (t) { p.append("publication_target", t); });
     }
     if (!(opts && (opts.noStatuses || opts.ignoreStatuses))) {
-      // Mesmo filtro da plataforma oficial: rascunhos = tarefas a fazer.
+      // Filtro documentado da plataforma oficial para redações.
       p.append("answer_statuses", "draft");
+      p.append("answer_statuses", "pending");
     }
     p.set("with_apply_moment", "true");
     var resp = await originalFetch(EDUSP + "/tms/task/todo?" + p.toString(), { headers: eduspHeaders(apiKey) });
@@ -150,7 +152,7 @@
     var target = String(raw.publication_target || "").split(":")[0];
     return {
       id: raw.id != null ? raw.id : raw.task_id,
-      title: raw.title || raw.name || "Tarefa",
+      title: raw.title || raw.name || "Redação",
       subject: raw.discipline_name || raw.subject_name || "",
       room: roomTopics[target] || raw.room_name || target,
       status: "pending",
@@ -192,7 +194,7 @@
     rooms.forEach(function (r) { if (r && r.name) topics[r.name] = r.topic || r.name; });
     var tasks = raws
       .filter(function (t) {
-        if (!t || t.task_expired) return false;
+        if (!t || t.task_expired || t.is_essay !== true) return false;
         var a = t.answer_status == null ? null : String(t.answer_status).toLowerCase();
         return a === null || a === "draft" || a === "pending";
       })
@@ -207,7 +209,7 @@
     var key = session ? String(session.token || session.token2 || "") : "";
     if (cache && cache.key === key && Date.now() - cache.at < CACHE_MS) return cache.promise;
     var promise = loadTasks().catch(function (err) {
-      console.warn("[EduX] Tarefas via navegador indisponíveis:", err && err.message ? err.message : err);
+      console.warn("[EduX] Redações via navegador indisponíveis:", err && err.message ? err.message : err);
       return null;
     });
     cache = { at: Date.now(), key: key, promise: promise };
@@ -280,6 +282,16 @@
     if (existing && existing.parentNode) existing.parentNode.removeChild(existing);
   }
 
+  function renameTaskLabels() {
+    var nodes = document.querySelectorAll("h1, h2, h3, a, button, span, p");
+    nodes.forEach(function (node) {
+      var text = String(node.textContent || "").trim();
+      if (text === "Tarefas") node.textContent = "Redações";
+      else if (text === "Tarefa") node.textContent = "Redação";
+      else if (text === "Tarefas pendentes") node.textContent = "Redações pendentes";
+    });
+  }
+
   // O painel pode renderizar depois da resposta chegar; observa o DOM.
   var observer = new MutationObserver(function () {
     if (!lastTurmaTexto || document.getElementById("sdf-turma-line")) return;
@@ -287,10 +299,11 @@
     if (h1) showTurmaLine(lastTurmaTexto);
   });
   if (document.body) observer.observe(document.body, { childList: true, subtree: true });
+  renameTaskLabels();
 
   window.fetch = async function (input, init) {
     var url = typeof input === "string" ? input : (input && input.url) || "";
-    var isPanel = /\/api\/public\/sdf\/(dashboard|tarefas)(\?|$)/.test(url);
+    var isPanel = /\/api\/public\/sdf\/(dashboard|tarefas|redacoes)(\?|$)/.test(url);
     if (!isPanel) return originalFetch(input, init);
 
     var browserPromise = getTasks();
@@ -300,15 +313,17 @@
       if (!data || typeof data !== "object") return resp;
       var browser = await browserPromise;
       if (!browser) return resp;
+      renameTaskLabels();
 
       var merged = [];
       var seen = {};
-      browser.tasks.concat(Array.isArray(data.tarefas) ? data.tarefas : []).forEach(function (t) {
+      browser.tasks.concat(Array.isArray(data.redacoes) ? data.redacoes : []).forEach(function (t) {
         var id = String(t && t.id != null ? t.id : JSON.stringify(t));
         if (seen[id]) return;
         seen[id] = true;
         merged.push(t);
       });
+      data.redacoes = merged;
       data.tarefas = merged;
       data.pendencias = merged.filter(function (t) { return t.status === "pending"; }).length;
       data.targets = browser.targets;
