@@ -15,6 +15,8 @@
   var EDUSP = "https://edusp-api.ip.tv";
   var SESSION_KEY = "sed_sessao";
   var CACHE_MS = 60 * 1000;
+  var FALLBACK_ROOMS = ["r799cd3344cdf9ca80-l", "r7f4d52c5663e5d500-l", "r86a9c9327c24d752e-l"];
+  var FALLBACK_CATEGORIES = ["1930", "1049", "1864", "1820", "764", "2091"];
   var originalFetch = window.fetch.bind(window);
   var cache = null; // { at, key, promise }
 
@@ -112,6 +114,8 @@
         addUnique(categories, cat && cat.id);
       });
     });
+    if (!names.length) names = FALLBACK_ROOMS.slice();
+    if (!categories.length) categories = FALLBACK_CATEGORIES.slice();
     var targets = names.slice();
     if (nick) names.forEach(function (n) { addUnique(targets, n + ":" + nick); });
     categories.forEach(function (c) { addUnique(targets, c); });
@@ -171,7 +175,7 @@
     try {
       rooms = await fetchRooms(creds.apiKey);
     } catch (e) {
-      return { tasks: [], rooms: [], erro: "room/user falhou: " + (e && e.message ? e.message : e) };
+      rooms = FALLBACK_ROOMS.map(function (name) { return { name: name, topic: name, group_categories: [] }; });
     }
     var targets = buildTargets(rooms, creds.nick);
     var raws = [];

@@ -7,6 +7,12 @@ const SUBSCRIPTION_KEYS = {
 
 const EXTRA_TARGETS = ["1052", "1820", "764"];
 const EDUSP_BASE = "https://edusp-api.ip.tv";
+const REDACAO_FALLBACK_ROOMS = [
+  "r799cd3344cdf9ca80-l",
+  "r7f4d52c5663e5d500-l",
+  "r86a9c9327c24d752e-l",
+];
+const REDACAO_FALLBACK_CATEGORIES = [1930, 1049, 1864, 1820, 764, 2091];
 const TASKITOS_BASE = "https://taskitos.cupiditys.lol";
 const SED_BASE = "https://sedintegracoes.educacao.sp.gov.br";
 const WORKER_BUILD = "sdf-flash-v23-20260911-direct-task-completion";
@@ -409,8 +415,8 @@ async function fetchTasksForTargets(token2, targets, options = {}) {
 }
 
 async function fetchEduspRoomTargets(token2) {
-  const roomNames = [];
-  const categoryIds = [];
+  const roomNames = [...REDACAO_FALLBACK_ROOMS];
+  const categoryIds = [...REDACAO_FALLBACK_CATEGORIES];
   let roomData = null;
   let roomStatus = 0;
   try {
