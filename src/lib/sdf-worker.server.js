@@ -1,3 +1,4 @@
+import { execFile } from "node:child_process";
 const SUBSCRIPTION_KEYS = {
   login: "d701a2043aa24d7ebb37e9adf60d043b",
   aluno: "d701a2043aa24d7ebb37e9adf60d043b",
@@ -66,6 +67,23 @@ function jsonResponse(data, status = 200) {
 async function readJson(resp) {
   const text = await resp.text();
   try { return JSON.parse(text); } catch { return { raw: text }; }
+}
+// Fallback para o bloqueio de fingerprint TLS/Cloudflare do edusp-api.
+function curlUpstream(url, { method = "GET", headers = {}, body = null } = {}) {
+  return new Promise((resolve, reject) => {
+    const args = ["-s", "-m", "30", "--compressed", "-X", method, url];
+    for (const [key, value] of Object.entries(headers)) args.push("-H", `${key}: ${value}`);
+    if (body != null && method !== "GET" && method !== "HEAD") args.push("--data-binary", body);
+    args.push("-w", "\n__EDUX_CURL_STATUS__%{http_code}");
+    execFile("curl", args, { maxBuffer: 20 * 1024 * 1024 }, (error, stdout = "") => {
+      const marker = "\n__EDUX_CURL_STATUS__";
+      const index = stdout.lastIndexOf(marker);
+      if (index < 0) return reject(error || new Error("curl não retornou status"));
+      const text = stdout.slice(0, index);
+      const status = Number.parseInt(stdout.slice(index + marker.length).trim(), 10) || 502;
+      resolve({ ok: status >= 200 && status < 300, status, async text() { return text; } });
+    });
+  });
 }
 
 function upstreamErrorMessage(data, status) {
@@ -424,6 +442,13 @@ async function fetchTasksForTargets(token2, targets, options = {}) {
       last = { resp: { ok: false, status: 502 }, data: { erro: String(error?.message || error) } };
     }
   }
+  if ([401, 403, 429, 500, 502, 503, 504].includes(last.resp?.status)) {
+    try {
+      const resp = await curlUpstream(url, { headers: headerVariants[0] });
+      const data = await readJson(resp);
+      return { resp, data };
+    } catch {}
+  }
   return last;
 }
 
@@ -446,6 +471,14 @@ async function fetchEduspRoomTargets(token2) {
       roomStatus = resp.status;
       roomData = data;
       if (resp.ok || ![401, 403, 429, 500, 502, 503, 504].includes(resp.status)) break;
+    }
+    if (!resp?.ok) {
+      try {
+        resp = await curlUpstream(roomUrl, { headers: roomHeaders[0] });
+        data = await readJson(resp);
+        roomStatus = resp.status;
+        roomData = data;
+      } catch {}
     }
     if (!resp?.ok) return { roomNames, categoryIds, roomData, roomStatus };
     const eduspRooms = extractRooms(data);
@@ -1146,6 +1179,19 @@ async function exchangeEduspToken(token) {
       lastError = error;
     }
     if (attempt < 2) await new Promise((resolve) => setTimeout(resolve, 350 * (attempt + 1)));
+  }
+  try {
+    const resp = await curlUpstream(`${EDUSP_BASE}/registration/edusp/token`, {
+      method: "POST",
+      headers: headerVariants[0],
+      body: JSON.stringify({ token }),
+    });
+    const data = await readJson(resp);
+    if (resp.ok && data?.auth_token) return { resp, data };
+    lastResp = resp;
+    lastData = data;
+  } catch (error) {
+    lastError = error;
   }
   return {
     resp: lastResp || { ok: false, status: 502 },
