@@ -80,6 +80,7 @@ function eduspCurlHeaders(headers = {}) {
     Traceparent: `00-${hex(16)}-${hex(8)}-01`,
     Origin: "https://saladofuturo.educacao.sp.gov.br",
     Referer: "https://saladofuturo.educacao.sp.gov.br/",
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
   };
 }
 function curlUpstream(url, { method = "GET", headers = {}, body = null } = {}) {
