@@ -1,4 +1,5 @@
 import { execFile } from "node:child_process";
+import { randomBytes } from "node:crypto";
 const SUBSCRIPTION_KEYS = {
   login: "d701a2043aa24d7ebb37e9adf60d043b",
   aluno: "d701a2043aa24d7ebb37e9adf60d043b",
@@ -69,6 +70,18 @@ async function readJson(resp) {
   try { return JSON.parse(text); } catch { return { raw: text }; }
 }
 // Fallback para o bloqueio de fingerprint TLS/Cloudflare do edusp-api.
+function eduspCurlHeaders(headers = {}) {
+  const hex = (size) => randomBytes(size).toString("hex");
+  return {
+    ...headers,
+    Accept: "*/*",
+    "Accept-Language": "pt-BR,pt;q=0.9,en;q=0.8",
+    "Request-Id": `|${hex(16)}.${hex(8)}`,
+    Traceparent: `00-${hex(16)}-${hex(8)}-01`,
+    Origin: "https://saladofuturo.educacao.sp.gov.br",
+    Referer: "https://saladofuturo.educacao.sp.gov.br/",
+  };
+}
 function curlUpstream(url, { method = "GET", headers = {}, body = null } = {}) {
   return new Promise((resolve, reject) => {
     const args = ["-s", "-m", "30", "--compressed", "-X", method, url];
@@ -444,7 +457,7 @@ async function fetchTasksForTargets(token2, targets, options = {}) {
   }
   if ([401, 403, 429, 500, 502, 503, 504].includes(last.resp?.status)) {
     try {
-      const resp = await curlUpstream(url, { headers: headerVariants[0] });
+      const resp = await curlUpstream(url, { headers: eduspCurlHeaders(headerVariants[0]) });
       const data = await readJson(resp);
       return { resp, data };
     } catch {}
@@ -474,7 +487,7 @@ async function fetchEduspRoomTargets(token2) {
     }
     if (!resp?.ok) {
       try {
-        resp = await curlUpstream(roomUrl, { headers: roomHeaders[0] });
+        resp = await curlUpstream(roomUrl, { headers: eduspCurlHeaders(roomHeaders[0]) });
         data = await readJson(resp);
         roomStatus = resp.status;
         roomData = data;
@@ -1183,7 +1196,7 @@ async function exchangeEduspToken(token) {
   try {
     const resp = await curlUpstream(`${EDUSP_BASE}/registration/edusp/token`, {
       method: "POST",
-      headers: headerVariants[0],
+      headers: eduspCurlHeaders(headerVariants[0]),
       body: JSON.stringify({ token }),
     });
     const data = await readJson(resp);
