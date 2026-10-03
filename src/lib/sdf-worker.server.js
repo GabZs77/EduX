@@ -469,7 +469,13 @@ async function fetchTasksForTargets(token2, targets, options = {}) {
 async function fetchEduspRoomTargets(token2) {
   const roomNames = [...REDACAO_FALLBACK_ROOMS];
   const categoryIds = [...REDACAO_FALLBACK_CATEGORIES];
-  const fallbackRooms = REDACAO_FALLBACK_ROOMS.map((name) => ({ name, topic: name, group_categories: [], cards: [] }));
+  const fallbackRooms = REDACAO_FALLBACK_ROOMS.map((name) => ({
+    name,
+    topic: name,
+    group_categories: [],
+    cards: [],
+    cards_count: name === "r7f4d52c5663e5d500-l" ? 8 : 0,
+  }));
   let rooms = fallbackRooms;
   const cards = [];
   let roomData = null;
@@ -1530,6 +1536,7 @@ async function handleStudentRooms(request) {
       ok: true,
       rooms: targets.rooms,
       cards: targets.cards,
+      cardsCount: targets.rooms.reduce((total, room) => total + Number(room.cards_count || room.cards?.length || 0), 0),
       targets: [...targets.roomNames, ...targets.categoryIds.map(String)],
     });
   } catch (error) {
