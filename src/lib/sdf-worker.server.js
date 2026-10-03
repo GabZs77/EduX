@@ -467,8 +467,6 @@ async function fetchTasksForTargets(token2, targets, options = {}) {
 }
 
 async function fetchEduspRoomTargets(token2) {
-  const roomNames = [...REDACAO_FALLBACK_ROOMS];
-  const categoryIds = [...REDACAO_FALLBACK_CATEGORIES];
   const fallbackRooms = REDACAO_FALLBACK_ROOMS.map((name) => ({
     name,
     topic: name,
@@ -476,7 +474,9 @@ async function fetchEduspRoomTargets(token2) {
     cards: [],
     cards_count: name === "r7f4d52c5663e5d500-l" ? 8 : 0,
   }));
-  let rooms = fallbackRooms;
+  const roomNames = [];
+  const categoryIds = [];
+  let rooms = [];
   const cards = [];
   let roomData = null;
   let roomStatus = 0;
@@ -503,7 +503,7 @@ async function fetchEduspRoomTargets(token2) {
         roomData = data;
       } catch {}
     }
-    if (!resp?.ok) return { roomNames, categoryIds, rooms, cards, roomData, roomStatus };
+    if (!resp?.ok) return { roomNames: REDACAO_FALLBACK_ROOMS, categoryIds: REDACAO_FALLBACK_CATEGORIES, rooms: fallbackRooms, cards, roomData, roomStatus };
     const eduspRooms = extractRooms(data).filter((room) => room?.name && (!room.disable_at || Date.parse(room.disable_at) > Date.now()));
     if (eduspRooms.length) rooms = eduspRooms;
     for (const room of eduspRooms) {
@@ -515,6 +515,11 @@ async function fetchEduspRoomTargets(token2) {
       }
     }
   } catch {}
+  if (!rooms.length) {
+    roomNames.push(...REDACAO_FALLBACK_ROOMS);
+    categoryIds.push(...REDACAO_FALLBACK_CATEGORIES);
+    rooms = fallbackRooms;
+  }
   return { roomNames, categoryIds, rooms, cards, roomData, roomStatus };
 }
 
