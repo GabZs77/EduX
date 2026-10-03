@@ -1517,9 +1517,14 @@ async function handleResume(request) {
 }
 
 async function handleStudentRooms(request) {
-  const token2 = getEduApiKey(request);
+  let token2 = getEduApiKey(request);
+  const token = request.headers.get("X-Token") || "";
   if (!token2) return jsonResponse({ erro: "Cabeçalho X-Token2 ausente" }, 400);
   try {
+    if (token) {
+      const refreshed = await exchangeEduspToken(token);
+      if (refreshed.resp?.ok && refreshed.data?.auth_token) token2 = String(refreshed.data.auth_token).trim();
+    }
     const targets = await fetchEduspRoomTargets(token2);
     return jsonResponse({
       ok: true,
