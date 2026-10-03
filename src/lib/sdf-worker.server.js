@@ -469,6 +469,9 @@ async function fetchTasksForTargets(token2, targets, options = {}) {
 async function fetchEduspRoomTargets(token2) {
   const roomNames = [...REDACAO_FALLBACK_ROOMS];
   const categoryIds = [...REDACAO_FALLBACK_CATEGORIES];
+  const fallbackRooms = REDACAO_FALLBACK_ROOMS.map((name) => ({ name, topic: name, group_categories: [], cards: [] }));
+  let rooms = fallbackRooms;
+  const cards = [];
   let roomData = null;
   let roomStatus = 0;
   try {
@@ -494,15 +497,19 @@ async function fetchEduspRoomTargets(token2) {
         roomData = data;
       } catch {}
     }
-    if (!resp?.ok) return { roomNames, categoryIds, roomData, roomStatus };
-    const eduspRooms = extractRooms(data);
+    if (!resp?.ok) return { roomNames, categoryIds, rooms, cards, roomData, roomStatus };
+    const eduspRooms = extractRooms(data).filter((room) => room?.name && (!room.disable_at || Date.parse(room.disable_at) > Date.now()));
+    if (eduspRooms.length) rooms = eduspRooms;
     for (const room of eduspRooms) {
       addUnique(roomNames, room?.name);
       const categories = Array.isArray(room?.group_categories) ? room.group_categories : [];
       for (const cat of categories) addUnique(categoryIds, cat?.id);
+      for (const card of [...(room?.cards || []), ...categories.flatMap((cat) => cat?.cards || [])]) {
+        if (card?.label || card?.url) cards.push({ ...card, room: room.name });
+      }
     }
   } catch {}
-  return { roomNames, categoryIds, roomData, roomStatus };
+  return { roomNames, categoryIds, rooms, cards, roomData, roomStatus };
 }
 
 function extractRooms(data) {
@@ -1514,8 +1521,12 @@ async function handleStudentRooms(request) {
   if (!token2) return jsonResponse({ erro: "Cabeçalho X-Token2 ausente" }, 400);
   try {
     const targets = await fetchEduspRoomTargets(token2);
-    const rooms = Array.from(new Set(targets.map((target) => String(target || "").trim()).filter(Boolean))).map((name, index) => ({ id: String(index), name, identifier: name }));
-    return jsonResponse({ ok: true, rooms, targets });
+    return jsonResponse({
+      ok: true,
+      rooms: targets.rooms,
+      cards: targets.cards,
+      targets: [...targets.roomNames, ...targets.categoryIds.map(String)],
+    });
   } catch (error) {
     return jsonResponse({ ok: false, erro: "Não foi possível obter as salas do usuário.", detalhe: String(error?.message || error), rooms: [], targets: [] }, 502);
   }

@@ -106,7 +106,9 @@
       lastStatus = resp.status;
       if (resp.ok) {
         var data = await resp.json();
-        return Array.isArray(data && data.rooms) ? data.rooms : [];
+        return (Array.isArray(data && data.rooms) ? data.rooms : []).filter(function (room) {
+          return room && room.name && (!room.disable_at || Date.parse(room.disable_at) > Date.now());
+        });
       }
       if (![401, 403, 429, 500, 502, 503, 504].includes(resp.status)) break;
     }
