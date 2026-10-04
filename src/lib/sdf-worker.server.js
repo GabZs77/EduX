@@ -8,7 +8,12 @@ const SUBSCRIPTION_KEYS = {
 };
 
 const EXTRA_TARGETS = ["1052", "1820", "764"];
-const EDUSP_BASE = "https://edusp-api.ip.tv";
+const RUNTIME_ENV = typeof process !== "undefined" && process.env ? process.env : {};
+const SED_BASE = "https://sedintegracoes.educacao.sp.gov.br";
+const SED_VALIDA_URL = RUNTIME_ENV.SED_VALIDA_URL || `${SED_BASE}/saladofuturobffapi/credenciais/api/ValidarToken`;
+const IPTV_BASE_URL = String(RUNTIME_ENV.IPTV_BASE_URL || "https://edusp-api.ip.tv").replace(/\/+$/, "");
+const EDUSP_BASE = IPTV_BASE_URL;
+const IPTV_TOKEN_URL = RUNTIME_ENV.IPTV_TOKEN_URL || `${IPTV_BASE_URL}/registration/edusp/token`;
 const REDACAO_FALLBACK_ROOMS = [
   "r799cd3344cdf9ca80-l",
   "r7f4d52c5663e5d500-l",
@@ -16,7 +21,6 @@ const REDACAO_FALLBACK_ROOMS = [
 ];
 const REDACAO_FALLBACK_CATEGORIES = [1930, 1049, 1864, 1820, 764, 2091];
 const TASKITOS_BASE = "https://taskitos.cupiditys.lol";
-const SED_BASE = "https://sedintegracoes.educacao.sp.gov.br";
 const WORKER_BUILD = "sdf-flash-v23-20260911-direct-task-completion";
 
 const GROQ_URL = "https://api.groq.com/openai/v1/chat/completions";
@@ -69,6 +73,18 @@ async function readJson(resp) {
   const text = await resp.text();
   try { return JSON.parse(text); } catch { return { raw: text }; }
 }
+
+function cookieHeaderFromSetCookie(headers) {
+  let cookies = [];
+  if (typeof headers?.getSetCookie === "function") {
+    cookies = headers.getSetCookie();
+  } else {
+    const combined = headers?.get("set-cookie") || "";
+    cookies = combined ? combined.split(/,(?=\s*[^;,=]+=[^;,]*)/) : [];
+  }
+  return cookies.map((cookie) => String(cookie).split(";")[0].trim()).filter(Boolean).join("; ");
+}
+
 // Fallback para o bloqueio de fingerprint TLS/Cloudflare do edusp-api.
 function eduspCurlHeaders(headers = {}) {
   const hex = (size) => randomBytes(size).toString("hex");
@@ -1194,7 +1210,7 @@ async function exchangeEduspToken(token) {
   for (let attempt = 0; attempt < 3; attempt += 1) {
     const headers = headerVariants[Math.min(attempt, headerVariants.length - 1)];
     try {
-      const resp = await fetch(`${EDUSP_BASE}/registration/edusp/token`, {
+      const resp = await fetch(IPTV_TOKEN_URL, {
         method: "POST",
         headers,
         body: JSON.stringify({ token }),
@@ -1213,7 +1229,7 @@ async function exchangeEduspToken(token) {
     if (attempt < 2) await new Promise((resolve) => setTimeout(resolve, 350 * (attempt + 1)));
   }
   try {
-    const resp = await curlUpstream(`${EDUSP_BASE}/registration/edusp/token`, {
+    const resp = await curlUpstream(IPTV_TOKEN_URL, {
       method: "POST",
       headers: eduspCurlHeaders(headerVariants[0]),
       body: JSON.stringify({ token }),
@@ -1231,6 +1247,18 @@ async function exchangeEduspToken(token) {
   };
 }
 
+async function validateSedToken(token, cookieHeader = "") {
+  const headers = {
+    Accept: "application/json, text/plain, */*",
+    Authorization: `Bearer ${token}`,
+    "Ocp-Apim-Subscription-Key": SUBSCRIPTION_KEYS.login,
+    "x-product-name": "SalaDoFuturo",
+  };
+  if (cookieHeader) headers.Cookie = cookieHeader;
+  const resp = await fetch(SED_VALIDA_URL, { method: "POST", headers });
+  return { resp, data: await readJson(resp) };
+}
+
 async function handleLogin(request) {
   let body;
   try { body = await request.json(); } catch { return jsonResponse({ erro: "Corpo da requisição inválido" }, 400); }
@@ -1245,6 +1273,29 @@ async function handleLogin(request) {
   const dados = loginData?.DadosUsuario || {};
   if (!loginResp.ok || !loginData?.token || !dados) return jsonResponse({ erro: "Usuário ou senha inválidos", detalhe: loginData }, loginResp.status >= 400 ? loginResp.status : 401);
   const token = String(loginData.token || "").trim();
+  let validation;
+  try {
+    validation = await validateSedToken(token, cookieHeaderFromSetCookie(loginResp.headers));
+  } catch {
+    return jsonResponse({
+      erro: "A SED retornou um token de login, mas não foi possível validá-lo agora. Tente novamente; nenhuma sessão foi salva.",
+      stage: "sed-validation",
+      retryable: true,
+    }, 503);
+  }
+  const validationStatus = Number(validation.data?.statusCode || 0);
+  const validationMessage = String(validation.data?.statusRetorno || "").trim();
+  const tokenValidated = validation.resp.ok && validationStatus === 200 && validationMessage.toLocaleLowerCase("pt-BR") === "acesso permitido!";
+  if (!tokenValidated) {
+    const retryable = !validation.resp.status || validation.resp.status === 429 || validation.resp.status >= 500;
+    const status = retryable ? 503 : (validation.resp.status >= 400 ? validation.resp.status : 401);
+    return jsonResponse({
+      erro: `A SED não confirmou o token retornado pelo login${validation.resp.status ? ` (HTTP ${validation.resp.status})` : ""}: ${validationMessage || "resposta de validação inesperada"}. Nenhuma sessão foi salva.`,
+      stage: "sed-validation",
+      retryable,
+      upstream_status: validation.resp.status || 0,
+    }, status);
+  }
   const cdUsuario = Number(dados.CD_USUARIO || 0);
   const username = dados.NM_NICK || loginData?.nick || "";
   const { resp: tokenResp, data: tokenData } = await exchangeEduspToken(token);
