@@ -1399,33 +1399,35 @@ async function handleDashboard(request) {
       currentTaskToken = String(refreshed.data.auth_token).trim();
       taskNick = String(refreshed.data.nick || "").trim();
     }
-  }
-  taskNick = taskNick || jwtNick(currentTaskToken) || username;
-  const taskResult = await fetchTasks(currentTaskToken, rooms, taskNick);
-  const eduspRooms = extractRooms(taskResult.roomData);
+	  }
+	  taskNick = taskNick || jwtNick(currentTaskToken) || username;
+	  const taskResult = await fetchTasks(currentTaskToken, rooms, taskNick);
+	  const taskList = Array.isArray(taskResult?.tasks) ? taskResult.tasks : [];
+	  const taskTargets = Array.isArray(taskResult?.targets) ? taskResult.targets : [];
+	  const eduspRooms = extractRooms(taskResult.roomData);
   const turmasIdentificadas = Array.from(new Set([
     ...rooms.map((room) => room?.name).filter(Boolean),
     ...eduspRooms.map((room) => room?.name).filter(Boolean),
   ]));
   const aluno = alunoResult.data;
   const alunoData = aluno?.data && typeof aluno.data === "object" ? aluno.data : aluno;
-  return jsonResponse({
-    aluno: alunoData || {}, turmas: rooms, turmasIdentificadas,
-    redacoes: taskResult.tasks.filter((t) => t.kind === "redacao"),
-    tarefas: taskResult.tasks.filter((t) => t.kind !== "redacao"),
-    pendencias: taskResult.tasks.filter((t) => t.status === "pending").length,
+	  return jsonResponse({
+	    aluno: alunoData || {}, turmas: rooms, turmasIdentificadas,
+	    redacoes: taskList.filter((t) => t.kind === "redacao"),
+	    tarefas: taskList.filter((t) => t.kind !== "redacao"),
+	    pendencias: taskList.filter((t) => t.status === "pending").length,
 
-    faltas: faltasResult.total, mensagensNaoLidas: notificationsResult.unread, mensagens: notificationsResult.total,
-    targets: taskResult.targets, tarefasApiOk: taskResult.ok, tarefasApiStatus: taskResult.status,
-    tarefasApiErro: taskResult.ok ? null : safeTaskApiError(taskResult.raw, taskResult.status),
+	    faltas: faltasResult.total, mensagensNaoLidas: notificationsResult.unread, mensagens: notificationsResult.total,
+	    targets: taskTargets, tarefasApiOk: taskResult.ok, tarefasApiStatus: taskResult.status,
+	    tarefasApiErro: taskResult.ok ? null : safeTaskApiError(taskResult.raw, taskResult.status),
     agenda: agendaResult.ok ? agendaResult.events : [],
     meta: {
-      turmasApiOk: roomsResult.resp.ok,
-      roomTargetsStatus: taskResult.roomTargetsStatus || 0,
-      roomTargetCount: taskResult.targets.length,
-      eduspRoomCount: eduspRooms.length,
-      taskRawCount: taskResult.rawTaskCount || 0,
-      taskReturnedCount: taskResult.tasks.length,
+	      turmasApiOk: roomsResult.resp.ok,
+	      roomTargetsStatus: taskResult.roomTargetsStatus || 0,
+	      roomTargetCount: taskTargets.length,
+	      eduspRoomCount: eduspRooms.length,
+	      taskRawCount: taskResult.rawTaskCount || 0,
+	      taskReturnedCount: taskList.length,
       faltasApiOk: faltasResult.resp.ok,
       notificationsApiOk: notificationsResult.ok,
       alunoApiOk: !!alunoResult.resp?.ok,
