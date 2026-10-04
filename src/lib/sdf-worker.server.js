@@ -610,19 +610,31 @@ async function fetchTasks(token2, cdUsuario, baseTargets) {
         };
     }
 
-    if (!Array.isArray(baseTargets) || baseTargets.length === 0) {
+    const rooms = Array.isArray(baseTargets) ? baseTargets : [];
+    const eduspRooms = await fetchEduspRoomTargets(token2);
+    const targets = [];
+    for (const target of eduspRooms.roomNames || []) addUnique(targets, target);
+    for (const target of eduspRooms.categoryIds || []) addUnique(targets, target);
+    for (const room of rooms) {
+        const target = String(room?.identificador || room?.name || room?.id || "").trim();
+        if (target) addUnique(targets, target);
+    }
+    if (!Array.isArray(targets) || targets.length === 0) {
         return {
             ok: true,
             status: 200,
             tasks: [],
             rawCount: 0,
-            error: null
+            error: null,
+            targets,
+            roomData: eduspRooms.roomData,
+            roomTargetsStatus: eduspRooms.roomStatus,
         };
     }
 
     // Uma única consulta. Não fazemos retries, troca de headers
     // ou fallback para curl quando o upstream retorna 403.
-    const result = await fetchTasksForTargets(token2, baseTargets, {});
+    const result = await fetchTasksForTargets(token2, targets, {});
 
     if (!result.ok) {
         return {
@@ -631,7 +643,10 @@ async function fetchTasks(token2, cdUsuario, baseTargets) {
             tasks: [],
             rawCount: 0,
             error: result.error,
-            upstream: result.data
+            upstream: result.data,
+            targets,
+            roomData: eduspRooms.roomData,
+            roomTargetsStatus: eduspRooms.roomStatus,
         };
     }
 
@@ -647,12 +662,21 @@ async function fetchTasks(token2, cdUsuario, baseTargets) {
         tasks = result.data.items;
     }
 
+    const normalizedTasks = tasks.map((task) => ({
+        ...normalizeTask(task, findRoomForTask(task, rooms, eduspRooms.roomData)),
+        kind: task?.is_essay === true ? "redacao" : "tarefa",
+    }));
     return {
         ok: true,
         status: result.status,
-        tasks,
+        tasks: normalizedTasks,
         rawCount: tasks.length,
-        error: null
+        rawTaskCount: tasks.length,
+        error: null,
+        targets,
+        raw: result.data,
+        roomData: eduspRooms.roomData,
+        roomTargetsStatus: eduspRooms.roomStatus,
     };
 }
 function findRoomForTask(task, rooms, eduspRoomData = null) {

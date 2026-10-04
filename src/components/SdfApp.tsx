@@ -36,12 +36,7 @@ export function SdfApp() {
     script.async = false;
     document.body.appendChild(script);
 
-    for (const id of [
-      "sdf-question-widgets",
-      "sdf-saved-accounts",
-      "sdf-task-helper",
-      "sdf-notas",
-    ]) {
+    for (const id of ["sdf-saved-accounts", "sdf-notas"]) {
       if (document.getElementById(id)) continue;
       const extras = document.createElement("script");
       extras.id = id;
