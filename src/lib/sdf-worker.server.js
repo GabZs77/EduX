@@ -1273,6 +1273,10 @@ async function handleLogin(request) {
   const dados = loginData?.DadosUsuario || {};
   if (!loginResp.ok || !loginData?.token || !dados) return jsonResponse({ erro: "Usuário ou senha inválidos", detalhe: loginData }, loginResp.status >= 400 ? loginResp.status : 401);
   const token = String(loginData.token || "").trim();
+  const cdUsuario = Number(dados.CD_USUARIO || 0);
+  const username = dados.NM_NICK || loginData?.nick || "";
+  // A ordem oficial é: login SED → emissão auth_token EduSP → validação SED.
+  const { resp: tokenResp, data: tokenData } = await exchangeEduspToken(token);
   let validation;
   try {
     validation = await validateSedToken(token, cookieHeaderFromSetCookie(loginResp.headers));
@@ -1296,9 +1300,6 @@ async function handleLogin(request) {
       upstream_status: validation.resp.status || 0,
     }, status);
   }
-  const cdUsuario = Number(dados.CD_USUARIO || 0);
-  const username = dados.NM_NICK || loginData?.nick || "";
-  const { resp: tokenResp, data: tokenData } = await exchangeEduspToken(token);
   if (!tokenResp.ok || !tokenData?.auth_token) {
     // Coloca o detalhe do erro upstream já dentro do texto principal ("erro"),
     // porque a tela de login hoje só exibe esse campo — sem isso o motivo real
