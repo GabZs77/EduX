@@ -33,8 +33,9 @@ async function proxy({ request }: { request: Request }) {
     method: request.method,
     headers,
     body: request.body,
+    duplex: "half",
     redirect: "manual",
-  });
+  } as RequestInit);
   return worker.fetch(forwarded, {
     GROQ_API_KEY: process.env["GROQ_API_KEY"],
   });
