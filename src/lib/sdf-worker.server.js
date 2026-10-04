@@ -452,43 +452,86 @@ async function fetchTurmas(cdUsuarioCurto, token) {
 }
 
 async function fetchTasksForTargets(token2, targets, options = {}) {
-  const params = new URLSearchParams();
-  params.set("expired_only", options.expiredOnly ? "true" : "false");
-  params.set("limit", "100"); params.set("offset", "0");
-  params.set("filter_expired", options.filterExpired === false ? "false" : "true");
-  params.set("is_exam", "false"); params.set("with_answer", "true");
-  params.set("is_essay", options.isEssay ? "true" : "false");
-  if (options.isEssay) params.set("exclude_category_id", "748331");
-  if (options.statuses !== false) {
-    for (const status of options.statuses || ["draft", "pending"]) params.append("answer_statuses", status);
-  }
-  params.set("with_apply_moment", "true");
-  for (const target of targets || []) params.append("publication_target", target);
-  const url = `${EDUSP_BASE}/tms/task/todo?${params.toString()}`;
-  const headerVariants = [
-    { ...UPSTREAM_HEADERS, "content-type": "application/json", "x-api-platform": "webclient", "x-api-realm": "edusp", "x-api-key": token2 },
-    { Accept: "application/json", "x-api-platform": "webclient", "x-api-realm": "edusp", "x-api-key": token2 },
-  ];
-  let last = { resp: { ok: false, status: 502 }, data: { erro: "Falha ao consultar tarefas" } };
-  for (const headers of headerVariants) {
-    try {
-      const resp = await fetch(url, { headers });
-      const data = await readJson(resp);
-      last = { resp, data };
-      if (resp.ok || ![401, 403, 429, 500, 502, 503, 504].includes(resp.status)) return last;
-    } catch (error) {
-      last = { resp: { ok: false, status: 502 }, data: { erro: String(error?.message || error) } };
+    if (!token2) {
+        return {
+            ok: false,
+            status: 400,
+            data: null,
+            error: "token2 ausente"
+        };
     }
-  }
-  if ([401, 403, 429, 500, 502, 503, 504].includes(last.resp?.status)) {
+
+    if (!Array.isArray(targets) || targets.length === 0) {
+        return {
+            ok: true,
+            status: 200,
+            data: [],
+            error: null
+        };
+    }
+
+    const url = new URL(`${EDUSP_BASE_URL}/tms/task/todo`);
+
+    if (options.isEssay !== undefined) {
+        url.searchParams.set("is_essay", options.isEssay ? "true" : "false");
+    }
+
+    if (Array.isArray(options.statuses) && options.statuses.length) {
+        url.searchParams.set("statuses", options.statuses.join(","));
+    }
+
+    if (options.filterExpired !== undefined) {
+        url.searchParams.set("filter_expired", String(options.filterExpired));
+    }
+
+    const headers = {
+        "Authorization": `Bearer ${token2}`,
+        "X-Token2": token2,
+        "Accept": "application/json"
+    };
+
     try {
-      const resp = await curlUpstream(url, { headers: eduspCurlHeaders(headerVariants[0]) });
-      const data = await readJson(resp);
-      return { resp, data };
-    } catch {}
-  }
-  return last;
-}
+        const response = await fetch(url.toString(), {
+            method: "GET",
+            headers
+        });
+
+        const text = await response.text();
+
+        let data = null;
+        try {
+            data = text ? JSON.parse(text) : null;
+        } catch {
+            data = text;
+        }
+
+        if (!response.ok) {
+            return {
+                ok: false,
+                status: response.status,
+                data,
+                error: response.status === 403
+                    ? "A API de tarefas recusou a requisição (403)."
+                    : `API de tarefas retornou HTTP ${response.status}.`
+            };
+        }
+
+        return {
+            ok: true,
+            status: response.status,
+            data,
+            error: null
+        };
+	    } catch (error) {
+	        return {
+	            ok: false,
+	            status: 0,
+	            data: null,
+	            error: error?.message || "Falha ao consultar tarefas."
+	        };
+	    }
+	}
+
 
 async function fetchEduspRoomTargets(token2) {
   const fallbackRooms = REDACAO_FALLBACK_ROOMS.map((name) => ({
@@ -556,70 +599,61 @@ function extractRooms(data) {
   return [];
 }
 
-async function fetchTasks(token2, rooms, username) {
-  const baseTargets = [];
-  const eduspTargets = await fetchEduspRoomTargets(token2);
-  const roomTargets = [...eduspTargets.roomNames];
-  if (!roomTargets.length) {
-    for (const room of rooms) {
-      const candidate = String(room?.identificador || room?.name || "").trim();
-      if (candidate) addUnique(roomTargets, candidate);
+async function fetchTasks(token2, cdUsuario, baseTargets) {
+    if (!token2) {
+        return {
+            ok: false,
+            status: 400,
+            tasks: [],
+            rawCount: 0,
+            error: "token2 ausente"
+        };
     }
-  }
-  for (const target of roomTargets) addUnique(baseTargets, target);
-  if (username) {
-    const taskUser = String(username).trim().replace(/-sp$/i, "");
-    for (const target of roomTargets) addUnique(baseTargets, `${target}:${taskUser}-sp`);
-  }
-  for (const categoryId of eduspTargets.categoryIds) addUnique(baseTargets, categoryId);
 
-  const rawTasks = [];
-  let lastResp = null;
-  let lastData = null;
-  let anySuccess = false;
-  // The API uses is_essay as a type selector. Query both types: filtering the
-  // response to essays was the regression that made ordinary pending tasks disappear.
-  for (const isEssay of [false, true]) {
-    let result = null;
-    for (const options of [
-      { statuses: ["draft", "pending"], isEssay, filterExpired: true, expiredOnly: false },
-      { statuses: false, isEssay, filterExpired: true, expiredOnly: false },
-      { statuses: false, isEssay, filterExpired: false, expiredOnly: false },
-    ]) {
-      try {
-        result = await fetchTasksForTargets(token2, baseTargets, options);
-        lastResp = result.resp; lastData = result.data;
-        if (result.resp?.ok) {
-          anySuccess = true;
-          rawTasks.push(...extractTasks(result.data));
-          if (extractTasks(result.data).length) break;
-        }
-      } catch {}
+    if (!Array.isArray(baseTargets) || baseTargets.length === 0) {
+        return {
+            ok: true,
+            status: 200,
+            tasks: [],
+            rawCount: 0,
+            error: null
+        };
     }
-  }
-  const seen = new Set();
-  const tasks = [];
-  for (const raw of rawTasks) {
-    const id = String(raw?.id ?? raw?.task_id ?? raw?.taskId ?? `${raw?.title}|${raw?.apply_moment ?? ""}`);
-    if (seen.has(id)) continue;
-    seen.add(id);
-    const task = normalizeTask(raw, findRoomForTask(raw, rooms, eduspTargets.roomData));
-    const rawStatus = raw?.answer_status ?? raw?.answerStatus ?? null;
-    if (task.status !== "pending") continue;
-    if (rawStatus && !["pending", "draft"].includes(String(rawStatus).toLowerCase())) continue;
-    tasks.push({ ...task, kind: raw?.is_essay === true ? "redacao" : "tarefa" });
-  }
-  tasks.sort((a, b) => (Date.parse(a.due || "") || 0) - (Date.parse(b.due || "") || 0));
-  return {
-    ok: anySuccess || (lastResp ? Boolean(lastResp.ok) : true),
-    status: anySuccess ? 200 : (lastResp?.status ?? 200),
-    tasks,
-    rawTaskCount: rawTasks.length,
-    targets: baseTargets,
-    raw: lastData,
-    roomData: eduspTargets.roomData,
-    roomTargetsStatus: eduspTargets.roomStatus,
-  };
+
+    // Uma única consulta. Não fazemos retries, troca de headers
+    // ou fallback para curl quando o upstream retorna 403.
+    const result = await fetchTasksForTargets(token2, baseTargets, {});
+
+    if (!result.ok) {
+        return {
+            ok: false,
+            status: result.status,
+            tasks: [],
+            rawCount: 0,
+            error: result.error,
+            upstream: result.data
+        };
+    }
+
+    let tasks = [];
+
+    if (Array.isArray(result.data)) {
+        tasks = result.data;
+    } else if (Array.isArray(result.data?.data)) {
+        tasks = result.data.data;
+    } else if (Array.isArray(result.data?.tasks)) {
+        tasks = result.data.tasks;
+    } else if (Array.isArray(result.data?.items)) {
+        tasks = result.data.items;
+    }
+
+    return {
+        ok: true,
+        status: result.status,
+        tasks,
+        rawCount: tasks.length,
+        error: null
+    };
 }
 function findRoomForTask(task, rooms, eduspRoomData = null) {
   const target = taskRoomTarget(task, "").toLowerCase();
