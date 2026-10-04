@@ -1,287 +1,59 @@
 /*
- * Redações pendentes consultadas direto do navegador do aluno.
+ * Ajustes de apresentação do painel do EduX.
  *
- * A API de tarefas (edusp-api.ip.tv) libera CORS para qualquer origem, mas
- * bloqueia com frequência servidores de hospedagem (Cloudflare 403). A
- * plataforma oficial faz essas chamadas a partir do navegador; aqui fazemos o
- * mesmo: identificamos as turmas do aluno logado (/room/user) e buscamos as
- * tarefas pendentes (/tms/task/todo) com exatamente os mesmos alvos. O
- * resultado é mesclado na resposta do painel antes de o app exibi-la.
+ * As tarefas e redações vêm do endpoint same-origin /api/public/sdf/dashboard,
+ * processadas pelo worker server-side. Não consulte edusp-api.ip.tv pelo
+ * navegador: o preflight CORS dessa API é bloqueado pela Cloudflare e a
+ * resposta do painel já contém os dados oficiais retornados pelo worker.
  */
 (function () {
   if (window.__sdfEduspTasksInstalled) return;
   window.__sdfEduspTasksInstalled = true;
 
-  var EDUSP = "https://edusp-api.ip.tv";
-  var SESSION_KEY = "sed_sessao";
-  var CACHE_MS = 60 * 1000;
-  var FALLBACK_ROOMS = ["r799cd3344cdf9ca80-l", "r7f4d52c5663e5d500-l", "r86a9c9327c24d752e-l"];
-  var FALLBACK_CATEGORIES = ["1930", "1049", "1864", "1820", "764", "2091"];
   var originalFetch = window.fetch.bind(window);
-  var cache = null; // { at, key, promise }
-
-  function readSession() {
-    try {
-      var raw = localStorage.getItem(SESSION_KEY);
-      return raw ? JSON.parse(raw) : null;
-    } catch (e) {
-      return null;
-    }
-  }
-
-  function writeSession(patch) {
-    try {
-      var current = readSession();
-      if (!current) return;
-      localStorage.setItem(SESSION_KEY, JSON.stringify(Object.assign({}, current, patch)));
-    } catch (e) {}
-  }
-
-  function jwtPayload(token) {
-    try {
-      var part = String(token || "").split(".")[1];
-      if (!part) return null;
-      var b64 = part.replace(/-/g, "+").replace(/_/g, "/");
-      while (b64.length % 4) b64 += "=";
-      return JSON.parse(atob(b64));
-    } catch (e) {
-      return null;
-    }
-  }
-
-  function isEduspToken(token) {
-    var p = jwtPayload(token);
-    return !!(p && p.realm === "edusp" && p.nick);
-  }
-
-  function eduspHeaders(apiKey) {
-    var h = { Accept: "application/json", "Content-Type": "application/json", "x-api-realm": "edusp", "x-api-platform": "webclient" };
-    if (apiKey) h["x-api-key"] = apiKey;
-    return h;
-  }
-
-  async function exchangeToken(sedToken) {
-    var resp = await originalFetch(EDUSP + "/registration/edusp/token", {
-      method: "POST",
-      headers: eduspHeaders(),
-      body: JSON.stringify({ token: sedToken }),
-    });
-    if (!resp.ok) return null;
-    var data = await resp.json().catch(function () { return null; });
-    if (!data || !data.auth_token) return null;
-    return { apiKey: String(data.auth_token).trim(), nick: String(data.nick || "").trim() };
-  }
-
-  async function resolveCredentials(session) {
-    // 1) Renova com o token do SED (sessões antigas guardam chave vencida).
-    if (session.token) {
-      try {
-        var fresh = await exchangeToken(session.token);
-        if (fresh) {
-          if (!fresh.nick) fresh.nick = (jwtPayload(fresh.apiKey) || {}).nick || "";
-          writeSession({ token2: fresh.apiKey });
-          return fresh;
-        }
-      } catch (e) {}
-    }
-    // 2) Usa a chave salva, se for realmente uma chave do EduSP.
-    if (isEduspToken(session.token2)) {
-      return { apiKey: session.token2, nick: jwtPayload(session.token2).nick };
-    }
-    return null;
-  }
-
-  function addUnique(list, value) {
-    if (value === undefined || value === null) return;
-    var text = String(value).trim();
-    if (text && list.indexOf(text) === -1) list.push(text);
-  }
-
-  async function fetchRooms(apiKey) {
-    var url = EDUSP + "/room/user?list_all=true&with_cards=true";
-    var variants = [eduspHeaders(apiKey), { Accept: "application/json", "x-api-realm": "edusp", "x-api-platform": "webclient", "x-api-key": apiKey }];
-    var lastStatus = 502;
-    for (var i = 0; i < variants.length; i++) {
-      var resp = await originalFetch(url, { headers: variants[i] });
-      lastStatus = resp.status;
-      if (resp.ok) {
-        var data = await resp.json();
-        return (Array.isArray(data && data.rooms) ? data.rooms : []).filter(function (room) {
-          return room && room.name && (!room.disable_at || Date.parse(room.disable_at) > Date.now());
-        });
-      }
-      if (![401, 403, 429, 500, 502, 503, 504].includes(resp.status)) break;
-    }
-    throw new Error("room/user " + lastStatus);
-  }
-
-  function buildTargets(rooms, nick) {
-    // Mesma ordem da plataforma oficial: salas, salas:nick, categorias.
-    var names = [];
-    var categories = [];
-    rooms.forEach(function (room) {
-      addUnique(names, room && room.name);
-      (Array.isArray(room && room.group_categories) ? room.group_categories : []).forEach(function (cat) {
-        addUnique(categories, cat && cat.id);
-      });
-    });
-    if (!names.length) names = FALLBACK_ROOMS.slice();
-    if (!categories.length) categories = FALLBACK_CATEGORIES.slice();
-    var targets = names.slice();
-    if (nick) names.forEach(function (n) { addUnique(targets, n + ":" + nick); });
-    categories.forEach(function (c) { addUnique(targets, c); });
-    return targets;
-  }
-
-  async function fetchTodo(apiKey, targets, opts) {
-    var p = new URLSearchParams();
-    p.set("expired_only", "false"); p.set("limit", "100"); p.set("offset", "0");
-    p.set("filter_expired", "true"); p.set("is_exam", "false"); p.set("with_answer", "true");
-    p.set("is_essay", opts && opts.isEssay ? "true" : "false");
-    if (opts && opts.isEssay) p.set("exclude_category_id", "748331");
-    if (!(opts && opts.noTargets)) targets.forEach(function (t) { p.append("publication_target", t); });
-    if (!(opts && (opts.noStatuses || opts.ignoreStatuses))) {
-      p.append("answer_statuses", "draft"); p.append("answer_statuses", "pending");
-    }
-    p.set("with_apply_moment", "true");
-    var resp = await originalFetch(EDUSP + "/tms/task/todo?" + p.toString(), { headers: eduspHeaders(apiKey) });
-    if (!resp.ok) throw new Error("tms/task/todo " + resp.status);
-    var data = await resp.json();
-    if (Array.isArray(data)) return data;
-    if (data && Array.isArray(data.tasks)) return data.tasks;
-    if (data && Array.isArray(data.data)) return data.data;
-    return [];
-  }
-  function normalize(raw, roomTopics) {
-    var answer = raw.answer_status == null ? null : String(raw.answer_status).toLowerCase();
-    var target = String(raw.publication_target || "").split(":")[0];
-    return {
-      id: raw.id != null ? raw.id : raw.task_id,
-      title: raw.title || raw.name || "Redação",
-      subject: raw.discipline_name || raw.subject_name || "",
-      room: roomTopics[target] || raw.room_name || target,
-      status: "pending",
-      answerStatus: answer || "pending",
-      due: raw.apply_moment || raw.expire_at || raw.due_date || null,
-      raw: raw,
-    };
-  }
-
-  async function loadTasks() {
-    var session = readSession();
-    if (!session) return { tasks: [], rooms: [], erro: "sem sess\u00e3o salva no navegador" };
-    var creds = await resolveCredentials(session);
-    if (!creds) return { tasks: [], rooms: [], erro: "token do EduSP indispon\u00edvel (troca de token falhou)" };
-    var rooms = [];
-    try {
-      rooms = await fetchRooms(creds.apiKey);
-    } catch (e) {
-      rooms = FALLBACK_ROOMS.map(function (name) { return { name: name, topic: name, group_categories: [] }; });
-    }
-    var targets = buildTargets(rooms, creds.nick);
-    var raws = [];
-    var erro = "";
-    for (var essayMode = 0; essayMode < 2; essayMode++) {
-      var found = [];
-      try {
-        found = await fetchTodo(creds.apiKey, targets, { isEssay: essayMode === 1 });
-        if (!found.length) found = await fetchTodo(creds.apiKey, targets, { isEssay: essayMode === 1, noStatuses: true });
-        if (!found.length) found = await fetchTodo(creds.apiKey, targets, { isEssay: essayMode === 1, noStatuses: true, noTargets: true });
-      } catch (e1) {
-        erro = "tms/task/todo falhou: " + (e1 && e1.message ? e1.message : e1);
-      }
-      raws = raws.concat(found);
-    }
-    var topics = {};
-    rooms.forEach(function (r) { if (r && r.name) topics[r.name] = r.topic || r.name; });
-    var tasks = raws
-      .filter(function (t) {
-        if (!t || t.task_expired) return false;
-        var a = t.answer_status == null ? null : String(t.answer_status).toLowerCase();
-        return a === null || a === "draft" || a === "pending";
-      })
-      .map(function (t) { var item = normalize(t, topics); item.kind = t.is_essay === true ? "redacao" : "tarefa"; return item; });
-    tasks.sort(function (a, b) { return (Date.parse(a.due || "") || 0) - (Date.parse(b.due || "") || 0); });
-    return { tasks: tasks, targets: targets, rooms: rooms, erro: erro };
-  }
-
-
-  function getTasks() {
-    var session = readSession();
-    var key = session ? String(session.token || session.token2 || "") : "";
-    if (cache && cache.key === key && Date.now() - cache.at < CACHE_MS) return cache.promise;
-    var promise = loadTasks().catch(function (err) {
-      console.warn("[EduX] Redações via navegador indisponíveis:", err && err.message ? err.message : err);
-      return null;
-    });
-    cache = { at: Date.now(), key: key, promise: promise };
-    return promise;
-  }
-
-
-  /* ---- Turma e sala abaixo do nome do aluno ---- */
   var lastTurmaTexto = "";
 
   function pickField(obj, pattern) {
     for (var key in obj) {
       if (Object.prototype.hasOwnProperty.call(obj, key) && pattern.test(key)) {
-        var v = obj[key];
-        if (v != null && String(v).trim()) return String(v).trim();
+        var value = obj[key];
+        if (value != null && String(value).trim()) return String(value).trim();
       }
     }
     return "";
   }
 
-  function buildTurmaLabel(turmas, rooms) {
+  function buildTurmaLabel(turmas, roomNames) {
     var turma = "";
     var sala = "";
     var lista = Array.isArray(turmas) ? turmas : [];
     for (var i = 0; i < lista.length; i++) {
-      var t = lista[i];
-      if (!t || typeof t !== "object") continue;
-      if (!turma) turma = pickField(t, /turma|serie|s\u00e9rie/i) || pickField(t, /^nome$/i);
-      if (!sala) sala = pickField(t, /sala/i);
+      var item = lista[i];
+      if (!item || typeof item !== "object") continue;
+      if (!turma) turma = pickField(item, /turma|serie|série/i) || pickField(item, /^nome$/i);
+      if (!sala) sala = pickField(item, /sala/i);
       if (turma && sala) break;
     }
-    if (!turma && Array.isArray(rooms)) {
-      for (var j = 0; j < rooms.length; j++) {
-        var r = rooms[j];
-        if (r && r.name) { turma = String(r.name).trim(); break; }
-      }
-    }
+    if (!turma && Array.isArray(roomNames) && roomNames.length) turma = String(roomNames[0] || "").trim();
     if (!turma && !sala) return "";
-    if (turma && sala) return "Turma: " + turma + " \u2022 Sala: " + sala;
+    if (turma && sala) return "Turma: " + turma + " • Sala: " + sala;
     return turma ? "Turma: " + turma : "Sala: " + sala;
   }
 
   function showTurmaLine(text) {
     lastTurmaTexto = text;
-    var h1 = document.querySelector(".page-heading h1") || document.querySelector("h1");
-    if (!h1) return;
+    var heading = document.querySelector(".page-heading h1") || document.querySelector("h1");
+    if (!heading) return;
     var existing = document.getElementById("sdf-turma-line");
-    if (existing) { existing.textContent = text; return; }
-    var p = document.createElement("p");
-    p.id = "sdf-turma-line";
-    p.textContent = text;
-    p.style.cssText = "margin:4px 0 0;font-size:.95rem;font-weight:500;opacity:.85;";
-    h1.insertAdjacentElement("afterend", p);
-  }
-
-  function showDebugLine(text) {
-    var h1 = document.querySelector(".page-heading h1") || document.querySelector("h1");
-    if (!h1) return;
-    var existing = document.getElementById("sdf-task-debug");
-    if (existing) { existing.textContent = text; return; }
-    var p = document.createElement("p");
-    p.id = "sdf-task-debug";
-    p.textContent = text;
-    p.style.cssText = "margin:2px 0 0;font-size:.8rem;opacity:.9;color:#ffb84d;";
-    h1.insertAdjacentElement("afterend", p);
-  }
-
-  function hideDebugLine() {
-    var existing = document.getElementById("sdf-task-debug");
-    if (existing && existing.parentNode) existing.parentNode.removeChild(existing);
+    if (existing) {
+      existing.textContent = text;
+      return;
+    }
+    var line = document.createElement("p");
+    line.id = "sdf-turma-line";
+    line.textContent = text;
+    line.style.cssText = "margin:4px 0 0;font-size:.95rem;font-weight:500;opacity:.85;";
+    heading.insertAdjacentElement("afterend", line);
   }
 
   function renameTaskLabels() {
@@ -294,11 +66,9 @@
     });
   }
 
-  // O painel pode renderizar depois da resposta chegar; observa o DOM.
   var observer = new MutationObserver(function () {
-    if (!lastTurmaTexto || document.getElementById("sdf-turma-line")) return;
-    var h1 = document.querySelector(".page-heading h1") || document.querySelector("h1");
-    if (h1) showTurmaLine(lastTurmaTexto);
+    renameTaskLabels();
+    if (lastTurmaTexto && !document.getElementById("sdf-turma-line")) showTurmaLine(lastTurmaTexto);
   });
   if (document.body) observer.observe(document.body, { childList: true, subtree: true });
   renameTaskLabels();
@@ -308,43 +78,17 @@
     var isPanel = /\/api\/public\/sdf\/(dashboard|tarefas|redacoes)(\?|$)/.test(url);
     if (!isPanel) return originalFetch(input, init);
 
-    var browserPromise = getTasks();
-    var resp = await originalFetch(input, init);
+    var response = await originalFetch(input, init);
     try {
-      var data = await resp.clone().json();
-      if (!data || typeof data !== "object") return resp;
-      var browser = await browserPromise;
-      if (!browser) return resp;
-      renameTaskLabels();
-
-      var merged = [];
-      var seen = {};
-      browser.tasks.concat(Array.isArray(data.redacoes) ? data.redacoes : []).forEach(function (t) {
-        var id = String(t && t.id != null ? t.id : JSON.stringify(t));
-        if (seen[id]) return;
-        seen[id] = true;
-        merged.push(t);
-      });
-      data.redacoes = merged.filter(function (t) { return t.kind === "redacao"; });
-      data.tarefas = merged.filter(function (t) { return t.kind !== "redacao"; });
-      data.pendencias = merged.filter(function (t) { return t.status === "pending"; }).length;
-      data.targets = browser.targets;
-      data.tarefasErro = browser.erro || "";
-      data.tarefasFonte = browser.erro ? "erro" : "navegador";
-      if (browser.erro) {
-        console.warn("[EduX] Diagn\u00f3stico das tarefas:", browser.erro);
-        showDebugLine(browser.erro);
-      } else {
-        hideDebugLine();
+      var data = await response.clone().json();
+      if (data && typeof data === "object") {
+        var turmaTexto = buildTurmaLabel(data.turmas, data.turmasIdentificadas);
+        if (turmaTexto) showTurmaLine(turmaTexto);
+        renameTaskLabels();
       }
-      var turmaTexto = buildTurmaLabel(data.turmas, browser.rooms);
-      if (turmaTexto) showTurmaLine(turmaTexto);
-      var headers = new Headers(resp.headers);
-      headers.delete("content-length");
-      headers.delete("content-encoding");
-      return new Response(JSON.stringify(data), { status: resp.status, statusText: resp.statusText, headers: headers });
-    } catch (e) {
-      return resp;
+    } catch (error) {
+      // Não altere a resposta do endpoint se o corpo não for JSON válido.
     }
+    return response;
   };
 })();

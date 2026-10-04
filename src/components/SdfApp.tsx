@@ -20,8 +20,8 @@ export function SdfApp() {
     if (document.getElementById("sdf-app-bundle")) return;
     w.__sdfAppMounted = true;
 
-    // Carregado antes do bundle: busca as tarefas pelo navegador do aluno,
-    // como a plataforma oficial, e mescla no painel.
+    // Carregado antes do bundle para aplicar rótulos e mostrar a turma usando
+    // a resposta do proxy same-origin, sem chamadas diretas à API EduSP.
     if (!document.getElementById("sdf-edusp-tasks")) {
       const tasks = document.createElement("script");
       tasks.id = "sdf-edusp-tasks";
