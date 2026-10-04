@@ -470,7 +470,7 @@ async function fetchTasksForTargets(token2, targets, options = {}) {
         };
     }
 
-    const url = new URL(`${EDUSP_BASE_URL}/tms/task/todo`);
+    const url = new URL(`${EDUSP_BASE}/tms/task/todo`);
 
     if (options.isEssay !== undefined) {
         url.searchParams.set("is_essay", options.isEssay ? "true" : "false");
