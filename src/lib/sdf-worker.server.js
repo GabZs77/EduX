@@ -1156,31 +1156,15 @@ async function handleDeleteNotification(request, url) {
 // Troca o token do SED pelo auth_token do EduSP. O endpoint às vezes responde
 // com 403/429/502 de forma intermitente (proteção antibot do ip.tv), por isso
 // tentamos algumas vezes com um pequeno atraso antes de desistir.
-function jwtPayload(token) {
+function jwtNick(token) {
   try {
     const part = String(token || "").split(".")[1];
-    if (!part) return null;
-    return JSON.parse(Buffer.from(part.replace(/-/g, "+").replace(/_/g, "/"), "base64").toString("utf8"));
+    if (!part) return "";
+    const json = JSON.parse(Buffer.from(part.replace(/-/g, "+").replace(/_/g, "/"), "base64").toString("utf8"));
+    return json?.realm === "edusp" && json?.nick ? String(json.nick).trim() : "";
   } catch {
-    return null;
+    return "";
   }
-}
-
-function hasEduSpTokenClaims(token) {
-  return jwtPayload(token)?.realm === "edusp";
-}
-
-function jwtNick(token) {
-  const payload = jwtPayload(token);
-  return payload?.realm === "edusp" && payload?.nick ? String(payload.nick).trim() : "";
-}
-
-function invalidEduSpSessionResponse() {
-  return jsonResponse({
-    erro: "A sessão não contém um auth_token do EduSP emitido pela plataforma. Entre novamente para tentar autenticar; o token SED não será usado como substituto.",
-    eduspUnavailable: true,
-    retryable: true,
-  }, 401);
 }
 
 async function exchangeEduspToken(token) {
@@ -1228,8 +1212,19 @@ async function exchangeEduspToken(token) {
     }
     if (attempt < 2) await new Promise((resolve) => setTimeout(resolve, 350 * (attempt + 1)));
   }
-  // Não tente contornar bloqueios do endpoint de autenticação por outro transporte.
-  // Sem emissão oficial de auth_token, a sessão deve ser recusada.
+  try {
+    const resp = await curlUpstream(`${EDUSP_BASE}/registration/edusp/token`, {
+      method: "POST",
+      headers: eduspCurlHeaders(headerVariants[0]),
+      body: JSON.stringify({ token }),
+    });
+    const data = await readJson(resp);
+    if (resp.ok && data?.auth_token) return { resp, data };
+    lastResp = resp;
+    lastData = data;
+  } catch (error) {
+    lastError = error;
+  }
   return {
     resp: lastResp || { ok: false, status: 502 },
     data: lastData || { erro: String(lastError?.message || lastError || "Falha de rede ao contatar o Sala do Futuro") },
@@ -1254,21 +1249,32 @@ async function handleLogin(request) {
   const username = dados.NM_NICK || loginData?.nick || "";
   const { resp: tokenResp, data: tokenData } = await exchangeEduspToken(token);
   if (!tokenResp.ok || !tokenData?.auth_token) {
+    // Coloca o detalhe do erro upstream já dentro do texto principal ("erro"),
+    // porque a tela de login hoje só exibe esse campo — sem isso o motivo real
+    // (status HTTP, mensagem do ip.tv) fica invisível para quem está no celular.
     const upstreamStatus = tokenResp.status || 0;
     const upstreamMsg = upstreamErrorMessage(tokenData, upstreamStatus);
-    const retryable = !upstreamStatus || upstreamStatus === 200 || [429, 500, 502, 503, 504].includes(upstreamStatus) ||
-      (upstreamStatus === 403 && /Cloudflare|temporariamente/i.test(upstreamMsg));
-    const status = retryable ? 503 : (upstreamStatus >= 400 && upstreamStatus < 500 ? upstreamStatus : 502);
-    const retryAdvice = retryable
-      ? "Aguarde alguns minutos e tente novamente."
-      : "Verifique seu acesso no Sala do Futuro oficial e tente novamente.";
-    const statusLabel = upstreamStatus ? ` (HTTP ${upstreamStatus})` : "";
-    return jsonResponse({
-      erro: `A autenticação da SED foi aceita, mas o EduSP não emitiu um auth_token${statusLabel}. ${upstreamMsg} ${retryAdvice} Nenhuma sessão foi salva.`,
-      eduspUnavailable: true,
-      retryable,
-      upstream_status: upstreamStatus,
-    }, status);
+    if (upstreamStatus === 403 && /Cloudflare/i.test(upstreamMsg)) {
+      return jsonResponse({
+        nome: dados.NAME || "Aluno",
+        apelido: username,
+        email: dados.EMAIL || "",
+        cdUsuario,
+        cdUsuarioCurto: String(Math.trunc(cdUsuario / 10)),
+        token,
+        token2: token,
+        eduspUnavailable: true,
+        aviso: upstreamMsg,
+      });
+    }
+    return jsonResponse(
+      {
+        erro: `Login ok, mas não foi possível abrir a sessão do Sala do Futuro (HTTP ${upstreamStatus}): ${upstreamMsg}`,
+        detalhe: tokenData,
+        upstream_status: upstreamStatus,
+      },
+      tokenResp.status || 401,
+    );
   }
   // O identificador usado nas turmas de tarefas é o "nick" do EduSP
   // (ex.: gabrielhenr127241606-sp), não o apelido do SED.
@@ -1282,7 +1288,6 @@ async function handleDashboard(request) {
   const cdUsuario = request.headers.get("X-Cd-Usuario");
   const username = request.headers.get("X-Task-User") || "";
   if (!token2 || !cdUsuario) return jsonResponse({ erro: "Cabeçalhos X-Token2 e X-Cd-Usuario são obrigatórios" }, 400);
-  if (token2 === token || !hasEduSpTokenClaims(token2)) return invalidEduSpSessionResponse();
   const [roomsResult, faltasResult, notificationsResult, alunoResult, agendaResult] = await Promise.all([
     fetchTurmas(cdUsuario, token), fetchFaltas(cdUsuario, token), fetchNotifications(cdUsuario),
     token ? fetchAluno(token, cdUsuario) : Promise.resolve({ resp: { ok: false }, data: null }),
@@ -1519,7 +1524,6 @@ async function handleResume(request) {
   const cdUsuarioCurto = request.headers.get("X-Cd-Usuario") || "";
   const apelido = request.headers.get("X-Task-User") || "";
   if (!token2 || !token) return jsonResponse({ ok: false, erro: "Sessão salva inválida ou expirada" }, 401);
-  if (token2 === token || !hasEduSpTokenClaims(token2)) return invalidEduSpSessionResponse();
   return jsonResponse({ ok: true, nome: apelido || "Aluno", apelido, token, token2, cdUsuarioCurto, usuario: request.headers.get("X-Usuario") || "" });
 }
 
@@ -1532,7 +1536,6 @@ async function handleStudentRooms(request) {
       const refreshed = await exchangeEduspToken(token);
       if (refreshed.resp?.ok && refreshed.data?.auth_token) token2 = String(refreshed.data.auth_token).trim();
     }
-    if (token2 === token || !hasEduSpTokenClaims(token2)) return invalidEduSpSessionResponse();
     const targets = await fetchEduspRoomTargets(token2);
     return jsonResponse({
       ok: true,
