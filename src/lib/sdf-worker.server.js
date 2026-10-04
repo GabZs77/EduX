@@ -106,7 +106,7 @@ function upstreamErrorMessage(data, status) {
     status === 403 &&
     /just a moment|cloudflare|challenge-platform|enable javascript and cookies/i.test(raw)
   ) {
-    return "O Sala do Futuro bloqueou temporariamente a emissão do auth_token por uma proteção anti-bot (Cloudflare).";
+    return "O Sala do Futuro bloqueou temporariamente a abertura da sessão por uma proteção anti-bot (Cloudflare). Aguarde alguns minutos e tente novamente.";
   }
   return raw.slice(0, 300) || "O serviço da Sala do Futuro não retornou uma mensagem detalhada.";
 }
@@ -1153,9 +1153,9 @@ async function handleDeleteNotification(request, url) {
 // =======================================================
 // HANDLERS DAS ROTAS
 // =======================================================
-// Troca o token do SED pelo auth_token emitido pelo EduSP. Bloqueios 403/429
-// são respeitados sem alternar cabeçalhos ou transporte; só erros 5xx recebem
-// novas tentativas limitadas.
+// Troca o token do SED pelo auth_token do EduSP. O endpoint às vezes responde
+// com 403/429/502 de forma intermitente (proteção antibot do ip.tv), por isso
+// tentamos algumas vezes com um pequeno atraso antes de desistir.
 function jwtPayload(token) {
   try {
     const part = String(token || "").split(".")[1];
@@ -1184,16 +1184,31 @@ function invalidEduSpSessionResponse() {
 }
 
 async function exchangeEduspToken(token) {
-  const headers = {
-    Accept: "application/json",
-    "Content-Type": "application/json",
-    "x-api-platform": "webclient",
-    "x-api-realm": "edusp",
-  };
+  const headerVariants = [
+    {
+      ...UPSTREAM_HEADERS,
+      "content-type": "application/json",
+      "x-api-platform": "webclient",
+      "x-api-realm": "edusp",
+      "sec-fetch-mode": "cors",
+      "sec-fetch-site": "same-site",
+      "sec-fetch-dest": "empty",
+    },
+    // Alguns dias o endpoint rejeita as variantes "sec-fetch-*" (host varia por
+    // proteção antibot); se a primeira tentativa falhar por request malformada
+    // tentamos de novo com o conjunto mínimo de headers que já funcionou antes.
+    {
+      ...UPSTREAM_HEADERS,
+      "content-type": "application/json",
+      "x-api-platform": "webclient",
+      "x-api-realm": "edusp",
+    },
+  ];
   let lastResp = null;
   let lastData = null;
   let lastError = null;
   for (let attempt = 0; attempt < 3; attempt += 1) {
+    const headers = headerVariants[Math.min(attempt, headerVariants.length - 1)];
     try {
       const resp = await fetch(`${EDUSP_BASE}/registration/edusp/token`, {
         method: "POST",
@@ -1204,9 +1219,10 @@ async function exchangeEduspToken(token) {
       lastResp = resp;
       lastData = data;
       if (resp.ok && data?.auth_token) return { resp, data };
-      // Não repita um pedido quando o provedor bloqueia (403/429). Um 4xx
-      // também não é transitório; somente falhas 5xx recebem retry limitado.
-      if ([400, 401, 403, 429].includes(resp.status) || ![500, 502, 503, 504].includes(resp.status)) break;
+      // 401/400 normalmente significam token do SED inválido/expirado — tentar
+      // de novo não ajuda. 403/429/5xx costumam ser bloqueio temporário/antibot,
+      // então vale tentar mais uma vez com um pequeno atraso.
+      if (![403, 429, 500, 502, 503, 504].includes(resp.status)) break;
     } catch (error) {
       lastError = error;
     }
