@@ -127,6 +127,14 @@ function upstreamErrorMessage(data, status) {
   return raw.slice(0, 300) || "O serviço da Sala do Futuro não retornou uma mensagem detalhada.";
 }
 
+function safeTaskApiError(data, status) {
+  return upstreamErrorMessage(data, status)
+    .replace(/\bBearer\s+\S+/gi, "Bearer [redigido]")
+    .replace(/eyJ[\w-]+\.[\w-]+\.[\w-]+/g, "[token redigido]")
+    .replace(/[\w.+-]+@[\w.-]+\.[A-Za-z]{2,}/g, "[email redigido]")
+    .slice(0, 240);
+}
+
 // Algumas rotas SED aceitam o caminho com o prefixo /saladofuturobffapi e outras
 // só respondem sem o prefixo (com prefixo devolvem 401). Tentamos as duas formas,
 // com e sem Bearer, e devolvemos a primeira resposta que funcionar.
@@ -1375,6 +1383,7 @@ async function handleDashboard(request) {
 
     faltas: faltasResult.total, mensagensNaoLidas: notificationsResult.unread, mensagens: notificationsResult.total,
     targets: taskResult.targets, tarefasApiOk: taskResult.ok, tarefasApiStatus: taskResult.status,
+    tarefasApiErro: taskResult.ok ? null : safeTaskApiError(taskResult.raw, taskResult.status),
     agenda: agendaResult.ok ? agendaResult.events : [],
     meta: {
       turmasApiOk: roomsResult.resp.ok,
