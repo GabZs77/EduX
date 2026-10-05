@@ -46,7 +46,10 @@ function corsHeaders() {
   return {
     "Access-Control-Allow-Origin": "*",
     "Access-Control-Allow-Methods": "GET,POST,PUT,DELETE,OPTIONS",
-    "Access-Control-Allow-Headers": "Content-Type, X-Token, X-Token2, X-Api-Key, X-Cd-Usuario, X-Task-User, X-Usuario, X-Captcha-Token, X-Captcha-Session, X-Captcha-Cookie, X-Admin-User",
+    "Access-Control-Allow-Headers": "Accept, Authorization, Content-Type, X-Requested-With, X-Token, X-Token2, X-Api-Key, X-Cd-Usuario, X-Task-User, X-Usuario, X-Captcha-Token, X-Captcha-Session, X-Captcha-Cookie, X-Admin-User",
+    "Access-Control-Expose-Headers": "X-Worker-Build, Content-Type",
+    "Access-Control-Max-Age": "86400",
+    Vary: "Origin, Access-Control-Request-Headers",
   };
 }
 
