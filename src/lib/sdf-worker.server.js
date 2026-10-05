@@ -1438,7 +1438,9 @@ async function handleDashboard(request) {
 	  return jsonResponse({
 	    aluno: alunoData || {}, turmas: rooms, turmasIdentificadas,
 	    redacoes: taskList.filter((t) => t.kind === "redacao"),
-	    tarefas: taskList.filter((t) => t.kind !== "redacao"),
+    // A tela principal renderiza tarefas; mantenha nela os dois tipos para
+    // que cada atividade possa exibir sua badge correspondente.
+    tarefas: taskList,
 	    pendencias: taskList.filter((t) => t.status === "pending").length,
 
 	    faltas: faltasResult.total, mensagensNaoLidas: notificationsResult.unread, mensagens: notificationsResult.total,

@@ -56,19 +56,51 @@
     heading.insertAdjacentElement("afterend", line);
   }
 
+  var lastActivities = [];
+  function installBadgeStyles() {
+    if (document.getElementById("sdf-kind-badge-style")) return;
+    var style = document.createElement("style");
+    style.id = "sdf-kind-badge-style";
+    style.textContent = ".activity-kind-badge{display:inline-flex;align-items:center;margin-left:8px;padding:3px 8px;border-radius:999px;font-size:.68rem;font-weight:700;letter-spacing:.04em;text-transform:uppercase;vertical-align:middle}.activity-kind-badge.is-task{color:#b9d8ff;background:rgba(66,133,244,.18);border:1px solid rgba(100,160,255,.35)}.activity-kind-badge.is-essay{color:#e4c5ff;background:rgba(164,91,255,.2);border:1px solid rgba(196,130,255,.4)}";
+    document.head.appendChild(style);
+  }
+
+  function applyActivityBadges(items) {
+    if (!Array.isArray(items) || !items.length) return;
+    lastActivities = items;
+    installBadgeStyles();
+    var byTitle = {};
+    items.forEach(function (item) {
+      var title = String(item && item.title || "").trim().toLowerCase();
+      if (title && !byTitle[title]) byTitle[title] = item;
+    });
+    document.querySelectorAll(".task-card").forEach(function (card) {
+      var title = card.querySelector(".task-title-line h3");
+      var line = card.querySelector(".task-title-line");
+      if (!title || !line || line.querySelector(".activity-kind-badge")) return;
+      var item = byTitle[String(title.textContent || "").trim().toLowerCase()];
+      if (!item) return;
+      var essay = item.kind === "redacao";
+      var badge = document.createElement("span");
+      badge.className = "activity-kind-badge " + (essay ? "is-essay" : "is-task");
+      badge.textContent = essay ? "Redação" : "Tarefa";
+      badge.setAttribute("aria-label", essay ? "Tipo: redação" : "Tipo: tarefa");
+      line.appendChild(badge);
+    });
+  }
+
   function renameTaskLabels() {
     var nodes = document.querySelectorAll("h1, h2, h3, a, button, span, p");
     nodes.forEach(function (node) {
       var text = String(node.textContent || "").trim();
-      if (text === "Tarefas") node.textContent = "Redações";
-      else if (text === "Tarefa") node.textContent = "Redação";
-      else if (text === "Tarefas pendentes") node.textContent = "Redações pendentes";
+      if (text === "Tarefas pendentes") node.textContent = "Atividades pendentes";
     });
   }
 
   var observer = new MutationObserver(function () {
     renameTaskLabels();
     if (lastTurmaTexto && !document.getElementById("sdf-turma-line")) showTurmaLine(lastTurmaTexto);
+    if (lastActivities.length) applyActivityBadges(lastActivities);
   });
   if (document.body) observer.observe(document.body, { childList: true, subtree: true });
   renameTaskLabels();
@@ -82,6 +114,9 @@
     try {
       var data = await response.clone().json();
       if (data && typeof data === "object") {
+        var activities = Array.isArray(data.tarefas) ? data.tarefas : [];
+        applyActivityBadges(activities);
+        setTimeout(function () { applyActivityBadges(activities); }, 0);
         var turmaTexto = buildTurmaLabel(data.turmas, data.turmasIdentificadas);
         if (turmaTexto) showTurmaLine(turmaTexto);
         renameTaskLabels();
