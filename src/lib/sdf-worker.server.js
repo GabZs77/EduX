@@ -486,7 +486,7 @@ async function fetchTasksForTargets(token2, targets, options = {}) {
 }
 
 
-async function fetchPendingAnswers(token2, nick, targets, isEssay) {
+async function fetchPendingAnswers(token2, nick, targets, isEssay, answerStatus = "pending") {
   if (!token2 || !nick || !targets.length) return { ok: false, status: 400, data: [] };
   const url = new URL(`${EDUSP_BASE}/tms/answer`);
   url.searchParams.set("nick", nick);
@@ -494,7 +494,7 @@ async function fetchPendingAnswers(token2, nick, targets, isEssay) {
   url.searchParams.set("offset", "0");
   url.searchParams.set("task_is_exam", "false");
   url.searchParams.set("task_is_essay", isEssay ? "true" : "false");
-  url.searchParams.set("status", "pending");
+  url.searchParams.set("status", answerStatus);
   url.searchParams.set("order", "asc");
   url.searchParams.set("order_by", "task_id");
   url.searchParams.set("with_apply_moment", "true");
@@ -603,10 +603,21 @@ async function fetchTasks(token2, rooms, username) {
       if (Array.isArray(list)) rawTasks.push(...list);
     }
   }
+  if (!rawTasks.length) {
+    for (const isEssay of [false, true]) {
+      const result = await fetchTasksForTargets(token2, targets, { isEssay, statuses: [], filterExpired: false });
+      last = result;
+      if (result.ok) {
+        const list = Array.isArray(result.data) ? result.data : (result.data?.data || result.data?.tasks || result.data?.items || []);
+        if (Array.isArray(list)) rawTasks.push(...list);
+      }
+    }
+  }
   if (!rawTasks.length && username) {
     const nick = `${String(username).replace(/-sp$/i, "")}-sp`;
     for (const isEssay of [false, true]) {
-      const result = await fetchPendingAnswers(token2, nick, targets, isEssay);
+      for (const answerStatus of ["pending", "draft"]) {
+        const result = await fetchPendingAnswers(token2, nick, targets, isEssay, answerStatus);
       const list = Array.isArray(result.data) ? result.data : (result.data?.data || result.data?.answers || result.data?.items || []);
       if (result.ok && Array.isArray(list)) {
         rawTasks.push(...list.map((answer) => ({
@@ -616,6 +627,7 @@ async function fetchTasks(token2, rooms, username) {
           publication_target: answer.publication_target || answer.task?.publication_target,
           is_essay: answer.task?.is_essay ?? isEssay,
         })));
+      }
       }
     }
   }
