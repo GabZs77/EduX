@@ -470,7 +470,15 @@ async function fetchTasksForTargets(token2, targets, options = {}) {
       method: "GET",
       headers: { ...UPSTREAM_HEADERS, Authorization: `Bearer ${token2}`, "X-Token2": token2, "x-api-key": token2, Accept: "application/json" },
     });
-    const data = await readJson(response);
+    let data = await readJson(response);
+    if (!response.ok || typeof data === "string") {
+      try {
+        const curlResponse = await curlUpstream(url.toString(), { headers: eduspCurlHeaders({ ...UPSTREAM_HEADERS, "x-api-key": token2, Authorization: `Bearer ${token2}` }) });
+        const curlData = await readJson(curlResponse);
+        if (curlResponse.ok) return { ok: true, status: curlResponse.status, data: curlData, error: null };
+        data = curlData;
+      } catch {}
+    }
     return { ok: response.ok, status: response.status, data, error: response.ok ? null : `API de tarefas retornou HTTP ${response.status}.` };
   } catch (error) {
     return { ok: false, status: 0, data: null, error: error?.message || "Falha ao consultar tarefas." };
