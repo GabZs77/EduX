@@ -557,6 +557,8 @@ async function fetchEduspRoomTargets(token2) {
     if (eduspRooms.length) rooms = eduspRooms;
     for (const room of eduspRooms) {
       addUnique(roomNames, room?.name);
+      addUnique(categoryIds, room?.category_id);
+      for (const categoryId of (Array.isArray(room?.category_ids) ? room.category_ids : [])) addUnique(categoryIds, categoryId);
       const categories = Array.isArray(room?.group_categories) ? room.group_categories : [];
       for (const cat of categories) addUnique(categoryIds, cat?.id);
       for (const card of [...(room?.cards || []), ...categories.flatMap((cat) => cat?.cards || [])]) {
