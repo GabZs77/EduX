@@ -486,6 +486,35 @@ async function fetchTasksForTargets(token2, targets, options = {}) {
 }
 
 
+async function fetchPendingAnswers(token2, nick, targets, isEssay) {
+  if (!token2 || !nick || !targets.length) return { ok: false, status: 400, data: [] };
+  const url = new URL(`${EDUSP_BASE}/tms/answer`);
+  url.searchParams.set("nick", nick);
+  url.searchParams.set("limit", "100");
+  url.searchParams.set("offset", "0");
+  url.searchParams.set("task_is_exam", "false");
+  url.searchParams.set("task_is_essay", isEssay ? "true" : "false");
+  url.searchParams.set("status", "pending");
+  url.searchParams.set("order", "asc");
+  url.searchParams.set("order_by", "task_id");
+  url.searchParams.set("with_apply_moment", "true");
+  for (const target of targets) url.searchParams.append("publication_target", String(target));
+  for (const field of ["id", "status", "task_id", "publication_target", "task.title", "task.is_essay", "task.expire_at", "task.publish_at", "task.description"]) url.searchParams.append("fields", field);
+  const headers = { ...UPSTREAM_HEADERS, Authorization: `Bearer ${token2}`, "X-Token2": token2, "x-api-key": token2, Accept: "application/json" };
+  try {
+    let response = await fetch(url.toString(), { headers });
+    let data = await readJson(response);
+    if (!response.ok || typeof data === "string") {
+      const curlResponse = await curlUpstream(url.toString(), { headers: eduspCurlHeaders(headers) });
+      data = await readJson(curlResponse);
+      response = curlResponse;
+    }
+    return { ok: response.ok, status: response.status, data };
+  } catch {
+    return { ok: false, status: 502, data: [] };
+  }
+}
+
 async function fetchEduspRoomTargets(token2) {
   const fallbackRooms = REDACAO_FALLBACK_ROOMS.map((name) => ({
     name,
@@ -572,6 +601,22 @@ async function fetchTasks(token2, rooms, username) {
     if (result.ok) {
       const list = Array.isArray(result.data) ? result.data : (result.data?.data || result.data?.tasks || result.data?.items || []);
       if (Array.isArray(list)) rawTasks.push(...list);
+    }
+  }
+  if (!rawTasks.length && username) {
+    const nick = `${String(username).replace(/-sp$/i, "")}-sp`;
+    for (const isEssay of [false, true]) {
+      const result = await fetchPendingAnswers(token2, nick, targets, isEssay);
+      const list = Array.isArray(result.data) ? result.data : (result.data?.data || result.data?.answers || result.data?.items || []);
+      if (result.ok && Array.isArray(list)) {
+        rawTasks.push(...list.map((answer) => ({
+          ...(answer.task || answer),
+          id: answer.task_id || answer.task?.id || answer.id,
+          answer_status: answer.status || answer.answer_status,
+          publication_target: answer.publication_target || answer.task?.publication_target,
+          is_essay: answer.task?.is_essay ?? isEssay,
+        })));
+      }
     }
   }
   const seen = new Set();
