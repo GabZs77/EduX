@@ -452,85 +452,30 @@ async function fetchTurmas(cdUsuarioCurto, token) {
 }
 
 async function fetchTasksForTargets(token2, targets, options = {}) {
-    if (!token2) {
-        return {
-            ok: false,
-            status: 400,
-            data: null,
-            error: "token2 ausente"
-        };
-    }
-
-    if (!Array.isArray(targets) || targets.length === 0) {
-        return {
-            ok: true,
-            status: 200,
-            data: [],
-            error: null
-        };
-    }
-
-    const url = new URL(`${EDUSP_BASE}/tms/task/todo`);
-
-    if (options.isEssay !== undefined) {
-        url.searchParams.set("is_essay", options.isEssay ? "true" : "false");
-    }
-
-    if (Array.isArray(options.statuses) && options.statuses.length) {
-        url.searchParams.set("statuses", options.statuses.join(","));
-    }
-
-    if (options.filterExpired !== undefined) {
-        url.searchParams.set("filter_expired", String(options.filterExpired));
-    }
-
-    const headers = {
-        "Authorization": `Bearer ${token2}`,
-        "X-Token2": token2,
-        "Accept": "application/json"
-    };
-
-    try {
-        const response = await fetch(url.toString(), {
-            method: "GET",
-            headers
-        });
-
-        const text = await response.text();
-
-        let data = null;
-        try {
-            data = text ? JSON.parse(text) : null;
-        } catch {
-            data = text;
-        }
-
-        if (!response.ok) {
-            return {
-                ok: false,
-                status: response.status,
-                data,
-                error: response.status === 403
-                    ? "A API de tarefas recusou a requisição (403)."
-                    : `API de tarefas retornou HTTP ${response.status}.`
-            };
-        }
-
-        return {
-            ok: true,
-            status: response.status,
-            data,
-            error: null
-        };
-	    } catch (error) {
-	        return {
-	            ok: false,
-	            status: 0,
-	            data: null,
-	            error: error?.message || "Falha ao consultar tarefas."
-	        };
-	    }
-	}
+  if (!token2) return { ok: false, status: 400, data: null, error: "token2 ausente" };
+  if (!Array.isArray(targets) || !targets.length) return { ok: true, status: 200, data: [], error: null };
+  const url = new URL(`${EDUSP_BASE}/tms/task/todo`);
+  url.searchParams.set("expired_only", "false");
+  url.searchParams.set("limit", "100");
+  url.searchParams.set("offset", "0");
+  url.searchParams.set("filter_expired", String(options.filterExpired ?? true));
+  url.searchParams.set("is_exam", "false");
+  url.searchParams.set("with_answer", "true");
+  url.searchParams.set("is_essay", options.isEssay ? "true" : "false");
+  url.searchParams.set("with_apply_moment", "true");
+  for (const target of targets) url.searchParams.append("publication_target", String(target));
+  for (const status of (options.statuses || ["draft", "pending"])) url.searchParams.append("answer_statuses", status);
+  try {
+    const response = await fetch(url.toString(), {
+      method: "GET",
+      headers: { ...UPSTREAM_HEADERS, Authorization: `Bearer ${token2}`, "X-Token2": token2, "x-api-key": token2, Accept: "application/json" },
+    });
+    const data = await readJson(response);
+    return { ok: response.ok, status: response.status, data, error: response.ok ? null : `API de tarefas retornou HTTP ${response.status}.` };
+  } catch (error) {
+    return { ok: false, status: 0, data: null, error: error?.message || "Falha ao consultar tarefas." };
+  }
+}
 
 
 async function fetchEduspRoomTargets(token2) {
@@ -599,85 +544,41 @@ function extractRooms(data) {
   return [];
 }
 
-async function fetchTasks(token2, cdUsuario, baseTargets) {
-    if (!token2) {
-        return {
-            ok: false,
-            status: 400,
-            tasks: [],
-            rawCount: 0,
-            error: "token2 ausente"
-        };
+async function fetchTasks(token2, rooms, username) {
+  if (!token2) return { ok: false, status: 400, tasks: [], rawTaskCount: 0, error: "token2 ausente" };
+  const roomList = Array.isArray(rooms) ? rooms : [];
+  const eduspRooms = await fetchEduspRoomTargets(token2);
+  const targets = [];
+  for (const target of eduspRooms.roomNames || []) addUnique(targets, target);
+  for (const room of roomList) addUnique(targets, room?.identificador || room?.name || room?.id);
+  if (username) {
+    const nick = String(username).replace(/-sp$/i, "");
+    for (const target of [...targets]) addUnique(targets, `${target}:${nick}-sp`);
+  }
+  for (const target of eduspRooms.categoryIds || []) addUnique(targets, target);
+  const rawTasks = [];
+  let last = { ok: true, status: 200, data: [] };
+  for (const isEssay of [false, true]) {
+    const result = await fetchTasksForTargets(token2, targets, { isEssay, statuses: ["draft", "pending"] });
+    last = result;
+    if (result.ok) {
+      const list = Array.isArray(result.data) ? result.data : (result.data?.data || result.data?.tasks || result.data?.items || []);
+      if (Array.isArray(list)) rawTasks.push(...list);
     }
-
-    const rooms = Array.isArray(baseTargets) ? baseTargets : [];
-    const eduspRooms = await fetchEduspRoomTargets(token2);
-    const targets = [];
-    for (const target of eduspRooms.roomNames || []) addUnique(targets, target);
-    for (const target of eduspRooms.categoryIds || []) addUnique(targets, target);
-    for (const room of rooms) {
-        const target = String(room?.identificador || room?.name || room?.id || "").trim();
-        if (target) addUnique(targets, target);
+  }
+  const seen = new Set();
+  const normalizedTasks = [];
+  for (const task of rawTasks) {
+    const id = String(task?.id ?? task?.task_id ?? `${task?.title}|${task?.apply_moment || ""}`);
+    if (seen.has(id)) continue;
+    seen.add(id);
+    const normalized = normalizeTask(task, findRoomForTask(task, roomList, eduspRooms.roomData));
+    const answerStatus = String(task?.answer_status ?? task?.answerStatus ?? "pending").toLowerCase();
+    if (["draft", "pending"].includes(answerStatus) || !task?.answer_status) {
+      normalizedTasks.push({ ...normalized, kind: task?.is_essay === true ? "redacao" : "tarefa" });
     }
-    if (!Array.isArray(targets) || targets.length === 0) {
-        return {
-            ok: true,
-            status: 200,
-            tasks: [],
-            rawCount: 0,
-            error: null,
-            targets,
-            roomData: eduspRooms.roomData,
-            roomTargetsStatus: eduspRooms.roomStatus,
-        };
-    }
-
-    // Uma única consulta. Não fazemos retries, troca de headers
-    // ou fallback para curl quando o upstream retorna 403.
-    const result = await fetchTasksForTargets(token2, targets, {});
-
-    if (!result.ok) {
-        return {
-            ok: false,
-            status: result.status,
-            tasks: [],
-            rawCount: 0,
-            error: result.error,
-            upstream: result.data,
-            targets,
-            roomData: eduspRooms.roomData,
-            roomTargetsStatus: eduspRooms.roomStatus,
-        };
-    }
-
-    let tasks = [];
-
-    if (Array.isArray(result.data)) {
-        tasks = result.data;
-    } else if (Array.isArray(result.data?.data)) {
-        tasks = result.data.data;
-    } else if (Array.isArray(result.data?.tasks)) {
-        tasks = result.data.tasks;
-    } else if (Array.isArray(result.data?.items)) {
-        tasks = result.data.items;
-    }
-
-    const normalizedTasks = tasks.map((task) => ({
-        ...normalizeTask(task, findRoomForTask(task, rooms, eduspRooms.roomData)),
-        kind: task?.is_essay === true ? "redacao" : "tarefa",
-    }));
-    return {
-        ok: true,
-        status: result.status,
-        tasks: normalizedTasks,
-        rawCount: tasks.length,
-        rawTaskCount: tasks.length,
-        error: null,
-        targets,
-        raw: result.data,
-        roomData: eduspRooms.roomData,
-        roomTargetsStatus: eduspRooms.roomStatus,
-    };
+  }
+  return { ok: last.ok, status: last.status, tasks: normalizedTasks, rawTaskCount: rawTasks.length, error: last.error || null, raw: last.data, targets, roomData: eduspRooms.roomData, roomTargetsStatus: eduspRooms.roomStatus };
 }
 function findRoomForTask(task, rooms, eduspRoomData = null) {
   const target = taskRoomTarget(task, "").toLowerCase();
