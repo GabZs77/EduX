@@ -89,6 +89,7 @@ export type Dashboard = {
   agenda: AgendaEvent[];
   tarefasApiOk?: boolean;
   tarefasApiStatus?: number;
+  tarefasApiError?: string;
   meta?: Record<string, unknown>;
 };
 

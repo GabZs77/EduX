@@ -50,6 +50,9 @@ export function HomePage() {
   const todayKey = today.toISOString().slice(0, 10);
   const todayEvents = agenda.filter((item) => item.data === todayKey && item.tipo !== "evento");
   const tasksFailed = dashboard?.tarefasApiOk === false;
+  const taskErrorMessage = dashboard?.tarefasApiStatus
+    ? `A Sala do Futuro não devolveu a lista (HTTP ${dashboard.tarefasApiStatus}).${dashboard.tarefasApiError ? ` Detalhe: ${dashboard.tarefasApiError}` : ""} Atualize para tentar novamente.`
+    : "A Sala do Futuro não devolveu a lista agora. Atualize a página para tentar de novo.";
 
   return (
     <div className="dashboard-page page-stack">
@@ -106,7 +109,7 @@ export function HomePage() {
             title={tasksFailed ? "Não foi possível carregar as tarefas" : "Nenhuma pendência encontrada"}
             message={
               tasksFailed
-                ? "A Sala do Futuro não devolveu a lista agora. Atualize a página para tentar de novo."
+                ? taskErrorMessage
                 : "Quando uma atividade precisar da sua atenção, ela aparecerá aqui."
             }
             actionLabel={tasksFailed ? "Tentar de novo" : undefined}
@@ -521,6 +524,10 @@ export function NotasPage() {
 export function TarefasPage() {
   const { dashboard, loading, refresh } = useStudent();
   const tasks = dashboard?.tarefas ?? [];
+  const tasksFailed = dashboard?.tarefasApiOk === false;
+  const taskErrorMessage = dashboard?.tarefasApiStatus
+    ? `A Sala do Futuro não devolveu a lista (HTTP ${dashboard.tarefasApiStatus}).${dashboard.tarefasApiError ? ` Detalhe: ${dashboard.tarefasApiError}` : ""} Atualize para tentar novamente.`
+    : "A Sala do Futuro não devolveu a lista agora. Atualize para tentar novamente.";
   return (
     <div className="page-stack">
       <PageHeading
@@ -542,7 +549,9 @@ export function TarefasPage() {
           <p>aguardando envio</p>
         </div>
       </div>
-      {tasks.length ? (
+      {tasksFailed ? (
+        <StateCard error title="Não foi possível carregar as tarefas" message={taskErrorMessage} actionLabel="Tentar de novo" onAction={() => void refresh()} />
+      ) : tasks.length ? (
         <div className="task-list-full">
           {tasks.map((task) => (
             <TaskCard key={String(task.id)} task={task} />
