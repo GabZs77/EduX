@@ -42,9 +42,9 @@ export function currentSchoolBimestre(date = new Date()): number {
 
 export function summarizeAttendanceYear(
   rows: FrequenciaBimestre[],
-  throughBimestre: number,
+  throughBimestre?: number,
 ): AttendanceYearSummary {
-  const periods = rows.filter((row) => row.bimestre <= throughBimestre);
+  const periods = throughBimestre == null ? rows : rows.filter((row) => row.bimestre <= throughBimestre);
   const aulasDadas = periods.reduce((total, row) => total + Math.max(0, row.aulasDadas), 0);
   const faltas = periods.reduce((total, row) => total + Math.max(0, row.faltas), 0);
   const presencas = Math.max(0, aulasDadas - faltas);

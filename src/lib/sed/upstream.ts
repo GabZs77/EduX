@@ -1464,9 +1464,9 @@ function normalizeFrequenciaBimestre(bimestre, data) {
   let qtdPct = 0;
   const disciplinas = [];
   for (const row of rows) {
-    const f = numberValue(row?.numeroFaltasBimestre ?? row?.faltas ?? row?.Faltas ?? row?.totalFaltas) || 0;
-    const p = numberValue(row?.numeroPresencasBimestre ?? row?.presencas ?? row?.totalPresencas) || 0;
-    const pct = numberValue(row?.porcentagemPresenca ?? row?.frequencia ?? row?.percentualFrequencia);
+    const f = numberValue(row?.numeroFaltasBimestre ?? row?.NumeroFaltasBimestre ?? row?.faltas ?? row?.Faltas ?? row?.totalFaltas ?? row?.TotalFaltas) || 0;
+    const p = numberValue(row?.numeroPresencasBimestre ?? row?.NumeroPresencasBimestre ?? row?.numeroPresencas ?? row?.NumeroPresencas ?? row?.presencas ?? row?.Presencas ?? row?.totalPresencas ?? row?.TotalPresencas) || 0;
+    const pct = numberValue(row?.porcentagemPresenca ?? row?.PorcentagemPresenca ?? row?.frequencia ?? row?.Frequencia ?? row?.percentualFrequencia ?? row?.PercentualFrequencia);
     faltas += f;
     presencas += p;
     if (pct !== null) { somaPct += pct; qtdPct += 1; }

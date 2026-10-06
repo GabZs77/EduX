@@ -256,7 +256,7 @@ export function PresencaPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const annual = summarizeAttendanceYear(rows, systemBimestre);
+  const annual = summarizeAttendanceYear(rows);
   const selectedRow = typeof periodoSelecionado === "number" ? rows.find((row) => row.bimestre === periodoSelecionado) : null;
   const futureBimestre = typeof periodoSelecionado === "number" && periodoSelecionado > systemBimestre;
   const hasSelectedBimestreData = Boolean(selectedRow && selectedRow.aulasDadas > 0 && selectedRow.frequencia !== null);
@@ -279,7 +279,7 @@ export function PresencaPage() {
           <section className="progress-card attendance-period-card">
             <div className="section-heading">
               <div>
-                <span className="eyebrow">Ano inteiro até agora</span>
+                <span className="eyebrow">Ano inteiro · todos os bimestres</span>
                 <h2>Ano Inteiro</h2>
               </div>
               <strong>{annual.frequencia != null ? `${annual.frequencia}%` : "—"}</strong>
@@ -290,7 +290,7 @@ export function PresencaPage() {
             <p className="data-note">
               <Info size={14} />
               {annual.aulasDadas > 0
-                ? `${annual.presencas} presenças e ${annual.faltas} faltas em ${annual.aulasDadas} aulas, até o ${systemBimestre}º bimestre deste ano.`
+                ? `${annual.presencas} presenças e ${annual.faltas} faltas em ${annual.aulasDadas} aulas, somando os bimestres disponíveis deste ano.`
                 : "Ainda não há aulas lançadas neste ano letivo para calcular o percentual."}
             </p>
           </section>

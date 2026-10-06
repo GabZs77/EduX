@@ -37,6 +37,17 @@ test("calcula o acumulado anual ponderado somente até o bimestre atual", () => 
   });
 });
 
+test("calcula o Ano Inteiro somando todos os bimestres disponíveis", () => {
+  const summary = summarizeAttendanceYear([period(1, 100, 4), period(2, 100, 10), period(3, 200, 20), period(4, 50, 0)]);
+
+  assert.deepEqual(summary, {
+    aulasDadas: 450,
+    faltas: 34,
+    presencas: 416,
+    frequencia: 92.4,
+  });
+});
+
 test("não inventa percentual anual quando ainda não há aulas lançadas", () => {
   assert.deepEqual(summarizeAttendanceYear([period(1, 0, 0), period(2, 0, 0)], 2), {
     aulasDadas: 0,
