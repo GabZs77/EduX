@@ -1,0 +1,43 @@
+/* Regras complementares para a navegação no celular e os períodos de presença. */
+@media (max-width: 760px) {
+  .bottom-nav {
+    grid-template-columns: repeat(5, minmax(0, 68px));
+    justify-content: center;
+    gap: 4px;
+    padding-inline: 0;
+  }
+
+  .bottom-link {
+    justify-self: center;
+    width: 100%;
+    text-align: center;
+  }
+}
+
+@media (max-width: 359px) {
+  .bottom-nav {
+    grid-template-columns: repeat(5, minmax(0, 1fr));
+    gap: 0;
+    padding-inline: 4px;
+  }
+}
+
+.attendance-period-tabs {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.attendance-period-tabs button {
+  min-width: 0;
+  padding-inline: 6px;
+  white-space: nowrap;
+}
+
+@media (max-width: 420px) {
+  .attendance-period-tabs {
+    gap: 6px;
+  }
+
+  .attendance-period-tabs button {
+    font-size: 10px;
+  }
+}

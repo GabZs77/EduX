@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { latestAttendanceBimestre, summarizeAttendanceYear } from "./attendance.ts";
+import { currentSchoolBimestre, summarizeAttendanceYear } from "./attendance.ts";
 import type { FrequenciaBimestre } from "./types.ts";
 
 function period(bimestre: number, aulasDadas: number, faltas: number): FrequenciaBimestre {
@@ -14,18 +14,16 @@ function period(bimestre: number, aulasDadas: number, faltas: number): Frequenci
   };
 }
 
-test("identifica o bimestre mais recente que tem lançamentos", () => {
-  const current = latestAttendanceBimestre([
-    period(3, 200, 20),
-    period(1, 100, 4),
-    period(4, 0, 0),
-    period(2, 100, 10),
-  ]);
-
-  assert.equal(current?.bimestre, 3);
+test("usa as datas oficiais de 2026 para reconhecer o fim do 3º e o início do 4º bimestre", () => {
+  assert.equal(currentSchoolBimestre(new Date("2026-10-04T12:00:00-03:00")), 3);
+  assert.equal(currentSchoolBimestre(new Date("2026-10-06T12:00:00-03:00")), 4);
 });
 
-test("calcula o acumulado anual ponderado até o bimestre atual", () => {
+test("identifica o 3º bimestre durante setembro de 2026", () => {
+  assert.equal(currentSchoolBimestre(new Date("2026-09-30T12:00:00-03:00")), 3);
+});
+
+test("calcula o acumulado anual ponderado somente até o bimestre atual", () => {
   const summary = summarizeAttendanceYear(
     [period(1, 100, 4), period(2, 100, 10), period(3, 200, 20), period(4, 50, 0)],
     3,
@@ -40,10 +38,7 @@ test("calcula o acumulado anual ponderado até o bimestre atual", () => {
 });
 
 test("não inventa percentual anual quando ainda não há aulas lançadas", () => {
-  const rows = [period(1, 0, 0), period(2, 0, 0)];
-
-  assert.equal(latestAttendanceBimestre(rows), null);
-  assert.deepEqual(summarizeAttendanceYear(rows, 2), {
+  assert.deepEqual(summarizeAttendanceYear([period(1, 0, 0), period(2, 0, 0)], 2), {
     aulasDadas: 0,
     faltas: 0,
     presencas: 0,

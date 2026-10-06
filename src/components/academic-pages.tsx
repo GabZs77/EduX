@@ -12,7 +12,7 @@ import {
 } from "lucide-react";
 import { useEffect, useState } from "react";
 import { APOSTILAS } from "@/lib/sed/apostilas";
-import { latestAttendanceBimestre, summarizeAttendanceYear } from "@/lib/sed/attendance";
+import { currentSchoolBimestre, summarizeAttendanceYear } from "@/lib/sed/attendance";
 import {
   fetchAgenda,
   fetchBoletim,
@@ -227,27 +227,19 @@ export function AgendaPage() {
 }
 
 export function PresencaPage() {
-  const { dashboard, loading } = useStudent();
+  const { loading } = useStudent();
+  const systemBimestre = currentSchoolBimestre();
   const [rows, setRows] = useState<FrequenciaBimestre[]>([]);
-  const [faltasBimestreAtual, setFaltasBimestreAtual] = useState<number | null>(dashboard?.faltas ?? null);
-  const [busy, setBusy] = useState(false);
+  const [busy, setBusy] = useState(true);
   const [error, setError] = useState("");
-  const [bimestreAtual, setBimestreAtual] = useState<number | null>(null);
-  const [bimestreSelecionado, setBimestreSelecionado] = useState<number | null>(null);
+  const [periodoSelecionado, setPeriodoSelecionado] = useState<3 | 4 | "year">(() => (systemBimestre === 4 ? 4 : 3));
 
   async function reload() {
     setBusy(true);
     setError("");
     try {
       const result = await fetchFrequencia();
-      const data = result.data || [];
-      const latest = latestAttendanceBimestre(data);
-      setRows(data);
-      setBimestreAtual(latest?.bimestre ?? null);
-      setBimestreSelecionado((previous) =>
-        data.some((row) => row.bimestre === previous) ? previous : latest?.bimestre ?? data.at(-1)?.bimestre ?? null,
-      );
-      setFaltasBimestreAtual(result.faltasBimestreAtual ?? result.faltas ?? latest?.faltas ?? null);
+      setRows(result.data || []);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Não foi possível carregar a frequência.");
     } finally {
@@ -260,76 +252,89 @@ export function PresencaPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const current = rows.find((row) => row.bimestre === bimestreAtual);
-  const selected = rows.find((row) => row.bimestre === bimestreSelecionado) ?? current;
-  const annual = summarizeAttendanceYear(rows, bimestreAtual ?? 0);
-  const annualFrequency = annual.frequencia ?? 0;
+  const annual = summarizeAttendanceYear(rows, systemBimestre);
+  const selectedRow = typeof periodoSelecionado === "number" ? rows.find((row) => row.bimestre === periodoSelecionado) : null;
+  const futureBimestre = typeof periodoSelecionado === "number" && periodoSelecionado > systemBimestre;
+  const hasSelectedBimestreData = Boolean(selectedRow && selectedRow.aulasDadas > 0 && selectedRow.frequencia !== null);
+  const selectedPercent = periodoSelecionado === "year" ? annual.frequencia : selectedRow?.frequencia ?? null;
+  const selectedLabel = periodoSelecionado === "year" ? "Ano Inteiro" : `${periodoSelecionado}º Bimestre`;
 
   return (
     <div className="page-stack">
       <PageHeading
         eyebrow="Frequência"
         title="Presença"
-        description="Acompanhe o bimestre atual, cada período e sua presença acumulada no ano."
+        description="Confira a presença do 3º e 4º bimestre ou o percentual do ano inteiro."
         onRefresh={() => void reload()}
         spinning={busy || loading}
       />
       {error ? <StateCard error title="Frequência indisponível" message={error} actionLabel="Tentar de novo" onAction={() => void reload()} /> : null}
-      <section className="stat-grid attendance-stats">
-        <StatCard icon={<CalendarClock size={16} />} label="Faltas no bimestre atual" value={String(faltasBimestreAtual ?? current?.faltas ?? "—")} note={current?.descricaoBimestre || "Lançadas na SED"} tone="amber" />
-        <StatCard icon={<CalendarDays size={16} />} label="Aulas no bimestre atual" value={String(current?.aulasDadas ?? "—")} note="Aulas registradas" tone="cyan" />
-        <StatCard icon={<ListChecks size={16} />} label="Presença no bimestre atual" value={current?.frequencia != null ? `${current.frequencia}%` : "—"} note="Média das disciplinas" tone="green" />
-        <StatCard icon={<BookOpen size={16} />} label="Presença anual" value={annual.frequencia != null ? `${annual.frequencia}%` : "—"} note={annual.aulasDadas ? `${annual.presencas} presenças · ${annual.faltas} faltas` : "Ano inteiro até agora"} />
-      </section>
-      <section className="progress-card attendance-year-card">
-        <div className="section-heading">
-          <div>
-            <span className="eyebrow">Ano inteiro até agora</span>
-            <h2>Presença anual</h2>
-          </div>
-          <strong>{annual.frequencia != null ? `${annual.frequencia}%` : "—"}</strong>
-        </div>
-        <div className="progress-track">
-          <span style={{ width: `${Math.max(0, Math.min(100, annualFrequency))}%` }} />
-        </div>
-        <p className="data-note">
-          <Info size={14} />
-          {annual.aulasDadas > 0
-            ? `${annual.presencas} presenças e ${annual.faltas} faltas em ${annual.aulasDadas} aulas até o ${bimestreAtual}º bimestre com lançamentos.`
-            : "Ainda não há aulas lançadas para calcular o acumulado anual."}
-        </p>
-      </section>
-      <section className="progress-card">
-        <div className="section-heading">
-          <h2>{selected?.descricaoBimestre || "Bimestre selecionado"}</h2>
-          <strong>{selected?.frequencia != null ? `${selected.frequencia}%` : "—"}</strong>
-        </div>
-        <div className="progress-track">
-          <span style={{ width: `${Math.max(0, Math.min(100, selected?.frequencia ?? 0))}%` }} />
-        </div>
-      </section>
-      {rows.length ? (
-        <div className="period-tabs">
-          {rows.map((row) => (
-            <button key={row.bimestre} type="button" className={row.bimestre === bimestreSelecionado ? "active" : ""} onClick={() => setBimestreSelecionado(row.bimestre)}>
-              {row.bimestre}º Bim{row.bimestre === bimestreAtual ? " · atual" : ""}
-            </button>
-          ))}
-        </div>
-      ) : null}
-      <div className="period-list">
-        {(selected?.disciplinas || []).map((item) => (
-          <article className="period-card" key={item.nomeDisciplina}>
-            <div>
-              <h3>{item.nomeDisciplina}</h3>
-              <p>
-                {item.faltas} faltas · {item.presencas} presenças
-              </p>
-            </div>
-            <strong>{item.frequencia != null ? `${item.frequencia}%` : "—"}</strong>
-          </article>
-        ))}
+      <div className="period-tabs attendance-period-tabs" role="group" aria-label="Período de presença">
+        <button type="button" aria-pressed={periodoSelecionado === 3} className={periodoSelecionado === 3 ? "active" : ""} onClick={() => setPeriodoSelecionado(3)}>
+          3º Bimestre
+        </button>
+        <button type="button" aria-pressed={periodoSelecionado === 4} className={periodoSelecionado === 4 ? "active" : ""} onClick={() => setPeriodoSelecionado(4)}>
+          4º Bimestre
+        </button>
+        <button type="button" aria-pressed={periodoSelecionado === "year"} className={periodoSelecionado === "year" ? "active" : ""} onClick={() => setPeriodoSelecionado("year")}>
+          Ano Inteiro
+        </button>
       </div>
+      {periodoSelecionado === "year" ? (
+        !busy ? (
+          <section className="progress-card attendance-period-card">
+            <div className="section-heading">
+              <div>
+                <span className="eyebrow">Ano inteiro até agora</span>
+                <h2>Ano Inteiro</h2>
+              </div>
+              <strong>{annual.frequencia != null ? `${annual.frequencia}%` : "—"}</strong>
+            </div>
+            <div className="progress-track">
+              <span style={{ width: `${Math.max(0, Math.min(100, annual.frequencia ?? 0))}%` }} />
+            </div>
+            <p className="data-note">
+              <Info size={14} />
+              {annual.aulasDadas > 0
+                ? `${annual.presencas} presenças e ${annual.faltas} faltas em ${annual.aulasDadas} aulas, até o ${systemBimestre}º bimestre deste ano.`
+                : "Ainda não há aulas lançadas neste ano letivo para calcular o percentual."}
+            </p>
+          </section>
+        ) : null
+      ) : futureBimestre ? (
+        <StateCard title={`${selectedLabel} ainda não está pronto`} message="Esse bimestre ainda não começou no calendário escolar deste ano." />
+      ) : !busy && !hasSelectedBimestreData ? (
+        <StateCard title={`${selectedLabel} ainda não está pronto`} message="A frequência desse bimestre ainda não foi disponibilizada pela SED." />
+      ) : selectedRow && hasSelectedBimestreData ? (
+        <>
+          <section className="progress-card attendance-period-card">
+            <div className="section-heading">
+              <div>
+                <span className="eyebrow">{periodoSelecionado === systemBimestre ? "Bimestre atual" : "Frequência do período"}</span>
+                <h2>{selectedLabel}</h2>
+              </div>
+              <strong>{selectedPercent != null ? `${selectedPercent}%` : "—"}</strong>
+            </div>
+            <div className="progress-track">
+              <span style={{ width: `${Math.max(0, Math.min(100, selectedPercent ?? 0))}%` }} />
+            </div>
+            <p className="data-note">
+              <Info size={14} /> {selectedRow.faltas} faltas · {selectedRow.aulasDadas} aulas registradas neste bimestre.
+            </p>
+          </section>
+          <div className="period-list">
+            {selectedRow.disciplinas.map((item) => (
+              <article className="period-card" key={item.nomeDisciplina}>
+                <div>
+                  <h3>{item.nomeDisciplina}</h3>
+                  <p>{item.faltas} faltas · {item.presencas} presenças</p>
+                </div>
+                <strong>{item.frequencia != null ? `${item.frequencia}%` : "—"}</strong>
+              </article>
+            ))}
+          </div>
+        </>
+      ) : null}
     </div>
   );
 }

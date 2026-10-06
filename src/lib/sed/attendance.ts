@@ -7,16 +7,37 @@ export type AttendanceYearSummary = {
   frequencia: number | null;
 };
 
-export function latestAttendanceBimestre(rows: FrequenciaBimestre[]): FrequenciaBimestre | null {
-  return rows.reduce<FrequenciaBimestre | null>((latest, row) => {
-    const hasLaunches =
-      row.aulasDadas > 0 ||
-      row.faltas > 0 ||
-      row.disciplinas.some((disciplina) => disciplina.presencas > 0 || disciplina.faltas > 0);
-    if (!hasLaunches) return latest;
-    if (!latest || row.bimestre > latest.bimestre) return row;
-    return latest;
-  }, null);
+function dateInSaoPaulo(date: Date) {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: "America/Sao_Paulo",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(date);
+  const get = (type: string) => parts.find((part) => part.type === type)?.value || "00";
+  return { year: Number(get("year")), iso: `${get("year")}-${get("month")}-${get("day")}`, month: Number(get("month")) };
+}
+
+export function currentSchoolBimestre(date = new Date()): number {
+  const { year, iso, month } = dateInSaoPaulo(date);
+
+  // Datas do calendário escolar oficial da SEDUC-SP para 2026.
+  if (year === 2026) {
+    if (iso < "2026-02-02") return 0;
+    if (iso <= "2026-04-22") return 1;
+    if (iso <= "2026-07-06") return 2;
+    if (iso < "2026-07-24") return 2;
+    if (iso <= "2026-10-02") return 3;
+    if (iso < "2026-10-05") return 3;
+    return 4;
+  }
+
+  // Fallback para anos seguintes até o calendário oficial correspondente ser cadastrado.
+  if (month === 1) return 0;
+  if (month <= 4) return 1;
+  if (month <= 6) return 2;
+  if (month <= 9) return 3;
+  return 4;
 }
 
 export function summarizeAttendanceYear(
