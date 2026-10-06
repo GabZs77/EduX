@@ -236,7 +236,7 @@ function extractTasks(data) {
   if (Array.isArray(data)) return data.filter((item) => item && typeof item === "object");
   if (!data || typeof data !== "object") return [];
   const collected = [];
-  for (const key of ["tasks", "items", "data", "results", "todo", "tarefas", "activities", "content"]) {
+  for (const key of ["tasks", "items", "data", "results", "todo", "tarefas", "activities", "content", "answers"]) {
     if (Array.isArray(data[key])) collected.push(...extractTasks(data[key]));
   }
   if (collected.length) return collected;
@@ -485,7 +485,7 @@ async function fetchTasksForTargets(token2, targets, options = {}) {
   if (Array.isArray(options.statuses)) {
     for (const status of options.statuses) params.append("answer_statuses", status);
   }
-  const headers = { ...UPSTREAM_HEADERS, "content-type": "application/json", "x-api-platform": "webclient", "x-api-realm": "edusp", "x-api-key": token2 };
+  const headers = { ...UPSTREAM_HEADERS, "content-type": "application/json", "x-api-platform": "webclient", "x-api-realm": "edusp", Authorization: `Bearer ${token2}`, "X-Token2": token2, "x-api-key": token2 };
   const chunks = chunkTargets(targets || []);
   const merged = [];
   let lastResp = null;
@@ -498,6 +498,40 @@ async function fetchTasksForTargets(token2, targets, options = {}) {
     if (resp.ok) merged.push(...extractTasks(data));
   }
   return { resp: lastResp, data: lastData, tasks: merged };
+}
+
+async function fetchPendingAnswers(token2, nick, targets, isEssay, answerStatus = "pending") {
+  if (!token2 || !nick || !Array.isArray(targets) || !targets.length) {
+    return { ok: false, status: 400, data: [] };
+  }
+  const url = new URL(`${EDUSP_BASE}/tms/answer`);
+  url.searchParams.set("nick", nick);
+  url.searchParams.set("limit", "100");
+  url.searchParams.set("offset", "0");
+  url.searchParams.set("task_is_exam", "false");
+  url.searchParams.set("task_is_essay", isEssay ? "true" : "false");
+  url.searchParams.set("status", answerStatus);
+  url.searchParams.set("order", "asc");
+  url.searchParams.set("order_by", "task_id");
+  url.searchParams.set("with_apply_moment", "true");
+  for (const target of targets) url.searchParams.append("publication_target", String(target));
+  for (const field of ["id", "status", "task_id", "publication_target", "task.title", "task.is_essay", "task.expire_at", "task.publish_at", "task.description"]) {
+    url.searchParams.append("fields", field);
+  }
+  const headers = {
+    ...UPSTREAM_HEADERS,
+    Authorization: `Bearer ${token2}`,
+    "X-Token2": token2,
+    "x-api-platform": "webclient",
+    "x-api-realm": "edusp",
+    "x-api-key": token2,
+  };
+  try {
+    const resp = await fetch(url.toString(), { headers, cache: "no-store" });
+    return { ok: resp.ok, status: resp.status, data: await readJson(resp) };
+  } catch (error) {
+    return { ok: false, status: 0, data: { erro: String(error?.message || error || "Falha ao consultar respostas pendentes.") } };
+  }
 }
 
 async function fetchEduspRooms(token2) {
@@ -625,7 +659,33 @@ async function fetchTasks(token2, rooms, username) {
     if (open.resp?.ok) pages.push(open.tasks?.length ? open.tasks : extractTasks(open.data));
   }
 
-  const rawTasks = mergeTodoPages(pages);
+  const answerFallbackTasks = [];
+  if (!mergeTodoPages(pages).length && nick && baseTargets.length) {
+    const studentNick = `${nick.replace(/-sp$/i, "")}-sp`;
+    for (const isEssay of [false, true]) {
+      for (const answerStatus of ["pending", "draft"]) {
+        const result = await fetchPendingAnswers(token2, studentNick, baseTargets, isEssay, answerStatus);
+        lastResp = { ok: result.ok, status: result.status };
+        lastData = result.data;
+        if (!result.ok) continue;
+        const answers = extractTasks(result.data);
+        answerFallbackTasks.push(...answers.map((answer) => {
+          const task = answer?.task && typeof answer.task === "object" ? answer.task : answer;
+          return {
+            ...task,
+            id: answer?.task_id ?? task?.id ?? answer?.id,
+            answer_status: answer?.status ?? answer?.answer_status ?? task?.answer_status,
+            publication_target: answer?.publication_target ?? task?.publication_target,
+            is_essay: task?.is_essay ?? answer?.task_is_essay ?? isEssay,
+          };
+        }));
+        if (answerFallbackTasks.length) break;
+      }
+      if (answerFallbackTasks.length) break;
+    }
+  }
+
+  const rawTasks = mergeTodoPages([...pages, answerFallbackTasks]);
   const seen = new Set();
   const tasks = [];
   for (const raw of rawTasks) {
@@ -1353,6 +1413,7 @@ async function handleDashboard(request) {
     aluno: alunoData || {}, turmas: rooms, tarefas: taskResult.tasks, pendencias: taskResult.tasks.length,
     faltas: faltasResult.total, mensagensNaoLidas: notificationsResult.unread, mensagens: notificationsResult.total,
     targets: taskResult.targets, tarefasApiOk: taskResult.ok, tarefasApiStatus: taskResult.status,
+    tarefasApiError: taskResult.ok ? undefined : upstreamErrorMessage(taskResult.raw, taskResult.status),
     agenda: agendaResult.ok ? agendaResult.events : [],
     meta: { turmasApiOk: roomsResult.resp.ok, faltasApiOk: faltasResult.resp.ok, notificationsApiOk: notificationsResult.ok, alunoApiOk: !!alunoResult.resp?.ok, agendaApiOk: !!agendaResult.ok },
   });

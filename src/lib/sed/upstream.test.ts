@@ -115,3 +115,67 @@ test("renova o token EduSP antes de buscar tarefas no dashboard", async () => {
     globalThis.fetch = originalFetch;
   }
 });
+
+test("usa respostas pendentes como fallback quando a rota todo falha", async () => {
+  const originalFetch = globalThis.fetch;
+  const answerHeaders: { authorization: string; token2: string }[] = [];
+  globalThis.fetch = async (input: RequestInfo | URL, init: RequestInit = {}) => {
+    const url = new URL(typeof input === "string" ? input : input instanceof URL ? input : input.url);
+    if (url.pathname === "/registration/edusp/token") {
+      return new Response(JSON.stringify({ auth_token: "fresh-edusp-token", nick: "student-fresh-sp" }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    }
+    if (url.pathname === "/room/user") {
+      return new Response(JSON.stringify({ rooms: [{ name: "room-test", group_categories: [] }] }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    }
+    if (url.pathname === "/tms/task/todo") {
+      return new Response(JSON.stringify({ message: "todo indisponível" }), {
+        status: 503,
+        headers: { "content-type": "application/json" },
+      });
+    }
+    if (url.pathname === "/tms/answer") {
+      const headers = new Headers(init.headers);
+      answerHeaders.push({
+        authorization: headers.get("authorization") || "",
+        token2: headers.get("x-token2") || "",
+      });
+      return new Response(JSON.stringify({ answers: [{
+        id: "answer-1",
+        task_id: "task-1",
+        status: "pending",
+        publication_target: "room-test",
+        task: { id: "task-1", title: "Tarefa recuperada", is_essay: false },
+      }] }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    }
+    return new Response(JSON.stringify({}), { status: 200, headers: { "content-type": "application/json" } });
+  };
+
+  try {
+    const response = await handleSedRequest(new Request("https://local.test/dashboard", {
+      headers: {
+        "X-Token": "valid-sed-token",
+        "X-Token2": "expired-edusp-token",
+        "X-Cd-Usuario": "12345678",
+        "X-Task-User": "student-old-sp",
+      },
+    }));
+    const data = await response.json();
+
+    assert.equal(response.status, 200);
+    assert.deepEqual(data.tarefas.map((task: { title: string }) => task.title), ["Tarefa recuperada"]);
+    assert.equal(data.tarefasApiOk, true);
+    assert(answerHeaders.length > 0);
+    assert(answerHeaders.every(({ authorization, token2 }) => authorization === "Bearer fresh-edusp-token" && token2 === "fresh-edusp-token"));
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
