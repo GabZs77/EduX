@@ -1334,7 +1334,19 @@ async function handleDashboard(request) {
     token ? fetchAgenda(token, cdUsuario) : Promise.resolve({ ok: false, events: [] }),
   ]);
   const rooms = roomsResult.rooms;
-  const taskResult = await fetchTasks(token2, rooms, username);
+  // O token EduSP pode expirar enquanto a sessão SED continua ativa. Renove-o
+  // antes de consultar tarefas; se a troca estiver temporariamente indisponível,
+  // mantenha o token da sessão como fallback, sem bloquear o restante dashboard.
+  let taskToken = token2;
+  let taskUsername = username;
+  if (token) {
+    const refreshed = await exchangeEduspToken(token);
+    if (refreshed.resp?.ok && refreshed.data?.auth_token) {
+      taskToken = String(refreshed.data.auth_token).trim();
+      taskUsername = String(refreshed.data.nick || refreshed.data.username || username || "").trim();
+    }
+  }
+  const taskResult = await fetchTasks(taskToken, rooms, taskUsername);
   const aluno = alunoResult.data;
   const alunoData = aluno?.data && typeof aluno.data === "object" ? aluno.data : aluno;
   return jsonResponse({

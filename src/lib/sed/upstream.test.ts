@@ -67,3 +67,51 @@ test("não cria sessão quando a SED não valida o token", async () => {
   assert.equal(data.token, undefined);
   assert.equal(data.token2, undefined);
 });
+
+test("renova o token EduSP antes de buscar tarefas no dashboard", async () => {
+  const originalFetch = globalThis.fetch;
+  const taskApiKeys: string[] = [];
+  globalThis.fetch = async (input: RequestInfo | URL, init: RequestInit = {}) => {
+    const url = new URL(typeof input === "string" ? input : input instanceof URL ? input : input.url);
+    if (url.pathname === "/registration/edusp/token") {
+      return new Response(JSON.stringify({ auth_token: "fresh-edusp-token", nick: "student-fresh-sp" }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    }
+    if (url.pathname === "/room/user") {
+      return new Response(JSON.stringify({ rooms: [{ name: "room-test", group_categories: [] }] }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    }
+    if (url.pathname === "/tms/task/todo") {
+      const headers = new Headers(init.headers);
+      taskApiKeys.push(headers.get("x-api-key") || "");
+      return new Response(JSON.stringify([{ id: "task-1", title: "Tarefa de teste", answer_status: null }]), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    }
+    return new Response(JSON.stringify({}), { status: 200, headers: { "content-type": "application/json" } });
+  };
+
+  try {
+    const response = await handleSedRequest(new Request("https://local.test/dashboard", {
+      headers: {
+        "X-Token": "valid-sed-token",
+        "X-Token2": "expired-edusp-token",
+        "X-Cd-Usuario": "12345678",
+        "X-Task-User": "student-old-sp",
+      },
+    }));
+    const data = await response.json();
+
+    assert.equal(response.status, 200);
+    assert.deepEqual(data.tarefas.map((task: { id: string }) => task.id), ["task-1"]);
+    assert(taskApiKeys.length > 0);
+    assert(taskApiKeys.every((key) => key === "fresh-edusp-token"));
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
