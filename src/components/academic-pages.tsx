@@ -242,8 +242,15 @@ export function PresencaPage() {
     setError("");
     try {
       const result = await fetchFrequencia();
-      setRows(result.data || []);
+      const listedRows = result.data || [];
+      setRows(listedRows);
       setFaltas(result.faltasBimestreAtual ?? result.faltas ?? null);
+      const latestListed = [...listedRows]
+        .filter((row) => row.aulasDadas > 0 || row.faltas > 0)
+        .sort((a, b) => b.bimestre - a.bimestre)[0];
+      if (latestListed && typeof periodoSelecionado === "number" && !listedRows.some((row) => row.bimestre === periodoSelecionado && row.aulasDadas > 0)) {
+        setPeriodoSelecionado(latestListed.bimestre as 1 | 2 | 3 | 4);
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : "Não foi possível carregar a frequência.");
     } finally {
@@ -302,7 +309,7 @@ export function PresencaPage() {
       ) : selectedRow ? (
         <>
           <section className="stat-grid attendance-stats">
-            <StatCard icon={<CalendarClock size={16} />} label="Faltas no bimestre" value={String(faltas ?? selectedRow.faltas ?? "—")} note="Lançadas na SED" tone="amber" />
+            <StatCard icon={<CalendarClock size={16} />} label="Faltas no bimestre" value={String(selectedRow.faltas ?? faltas ?? "—")} note="Lançadas na SED" tone="amber" />
             <StatCard icon={<CalendarDays size={16} />} label="Aulas dadas" value={String(selectedRow.aulasDadas)} note="No período selecionado" tone="cyan" />
             <StatCard icon={<ListChecks size={16} />} label="Presença" value={selectedRow.frequencia != null ? `${selectedRow.frequencia}%` : "—"} note="Média das disciplinas" tone="green" />
             <StatCard icon={<BookOpen size={16} />} label="Disciplinas" value={String(selectedRow.disciplinas.length)} note="Com lançamento" />
