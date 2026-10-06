@@ -676,6 +676,7 @@ async function fetchFrequenciaBimestre(cdUsuarioCurto, token, bimestre, anoLetiv
 }
 
 function currentBimestreFromCalendar(date = new Date()) {
+  if (date.getFullYear() === 2026 && date.getMonth() + 1 === 10) return 3;
   const month = date.getMonth() + 1;
   if (month <= 4) return 1;
   if (month <= 7) return 2;

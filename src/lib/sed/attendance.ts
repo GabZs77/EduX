@@ -27,8 +27,7 @@ export function currentSchoolBimestre(date = new Date()): number {
     if (iso <= "2026-04-22") return 1;
     if (iso <= "2026-07-06") return 2;
     if (iso < "2026-07-24") return 2;
-    if (iso <= "2026-10-02") return 3;
-    if (iso < "2026-10-05") return 3;
+    if (iso <= "2026-10-31") return 3;
     return 4;
   }
 

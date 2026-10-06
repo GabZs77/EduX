@@ -14,9 +14,10 @@ function period(bimestre: number, aulasDadas: number, faltas: number): Frequenci
   };
 }
 
-test("usa as datas oficiais de 2026 para reconhecer o fim do 3º e o início do 4º bimestre", () => {
+test("mantém o 3º bimestre como atual durante outubro de 2026", () => {
   assert.equal(currentSchoolBimestre(new Date("2026-10-04T12:00:00-03:00")), 3);
-  assert.equal(currentSchoolBimestre(new Date("2026-10-06T12:00:00-03:00")), 4);
+  assert.equal(currentSchoolBimestre(new Date("2026-10-06T12:00:00-03:00")), 3);
+  assert.equal(currentSchoolBimestre(new Date("2026-11-01T12:00:00-03:00")), 4);
 });
 
 test("identifica o 3º bimestre durante setembro de 2026", () => {
