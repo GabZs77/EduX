@@ -10,73 +10,141 @@
 
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as IndexRouteImport } from './routes/index'
-import { Route as SplatRouteImport } from './routes/$'
-import { Route as LeiaspRouteImport } from './routes/leiasp'
-import { Route as PlataformasRouteImport } from './routes/plataformas'
-import { Route as ApiPublicSdfSplatRouteImport } from './routes/api/public/sdf/$'
+import { Route as AgendaRouteImport } from './routes/agenda'
+import { Route as ApostilasRouteImport } from './routes/apostilas'
+import { Route as BoletimRouteImport } from './routes/boletim'
+import { Route as IaRouteImport } from './routes/ia'
+import { Route as InteligenciaArtificialRouteImport } from './routes/inteligencia-artificial'
+import { Route as PresencaRouteImport } from './routes/presenca'
+import { Route as TarefasRouteImport } from './routes/tarefas'
+import { Route as ApiSedSplatRouteImport } from './routes/api/sed/$'
 
 const IndexRoute = IndexRouteImport.update({
   id: '/',
   path: '/',
   getParentRoute: () => rootRouteImport,
 } as any)
-const SplatRoute = SplatRouteImport.update({
-  id: '/$',
-  path: '/$',
+const AgendaRoute = AgendaRouteImport.update({
+  id: '/agenda',
+  path: '/agenda',
   getParentRoute: () => rootRouteImport,
 } as any)
-const LeiaspRoute = LeiaspRouteImport.update({
-  id: '/leiasp',
-  path: '/leiasp',
+const ApostilasRoute = ApostilasRouteImport.update({
+  id: '/apostilas',
+  path: '/apostilas',
   getParentRoute: () => rootRouteImport,
 } as any)
-const PlataformasRoute = PlataformasRouteImport.update({
-  id: '/plataformas',
-  path: '/plataformas',
+const BoletimRoute = BoletimRouteImport.update({
+  id: '/boletim',
+  path: '/boletim',
   getParentRoute: () => rootRouteImport,
 } as any)
-const ApiPublicSdfSplatRoute = ApiPublicSdfSplatRouteImport.update({
-  id: '/api/public/sdf/$',
-  path: '/api/public/sdf/$',
+const IaRoute = IaRouteImport.update({
+  id: '/ia',
+  path: '/ia',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const InteligenciaArtificialRoute = InteligenciaArtificialRouteImport.update({
+  id: '/inteligencia-artificial',
+  path: '/inteligencia-artificial',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const PresencaRoute = PresencaRouteImport.update({
+  id: '/presenca',
+  path: '/presenca',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const TarefasRoute = TarefasRouteImport.update({
+  id: '/tarefas',
+  path: '/tarefas',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiSedSplatRoute = ApiSedSplatRouteImport.update({
+  id: '/api/sed/$',
+  path: '/api/sed/$',
   getParentRoute: () => rootRouteImport,
 } as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
-  '/$': typeof SplatRoute
-  '/leiasp': typeof LeiaspRoute
-  '/plataformas': typeof PlataformasRoute
-  '/api/public/sdf/$': typeof ApiPublicSdfSplatRoute
+  '/agenda': typeof AgendaRoute
+  '/apostilas': typeof ApostilasRoute
+  '/boletim': typeof BoletimRoute
+  '/ia': typeof IaRoute
+  '/inteligencia-artificial': typeof InteligenciaArtificialRoute
+  '/presenca': typeof PresencaRoute
+  '/tarefas': typeof TarefasRoute
+  '/api/sed/$': typeof ApiSedSplatRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
-  '/$': typeof SplatRoute
-  '/leiasp': typeof LeiaspRoute
-  '/plataformas': typeof PlataformasRoute
-  '/api/public/sdf/$': typeof ApiPublicSdfSplatRoute
+  '/agenda': typeof AgendaRoute
+  '/apostilas': typeof ApostilasRoute
+  '/boletim': typeof BoletimRoute
+  '/ia': typeof IaRoute
+  '/inteligencia-artificial': typeof InteligenciaArtificialRoute
+  '/presenca': typeof PresencaRoute
+  '/tarefas': typeof TarefasRoute
+  '/api/sed/$': typeof ApiSedSplatRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
-  '/$': typeof SplatRoute
-  '/leiasp': typeof LeiaspRoute
-  '/plataformas': typeof PlataformasRoute
-  '/api/public/sdf/$': typeof ApiPublicSdfSplatRoute
+  '/agenda': typeof AgendaRoute
+  '/apostilas': typeof ApostilasRoute
+  '/boletim': typeof BoletimRoute
+  '/ia': typeof IaRoute
+  '/inteligencia-artificial': typeof InteligenciaArtificialRoute
+  '/presenca': typeof PresencaRoute
+  '/tarefas': typeof TarefasRoute
+  '/api/sed/$': typeof ApiSedSplatRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
-  fullPaths: '/' | '/$' | '/leiasp' | '/plataformas' | '/api/public/sdf/$'
+  fullPaths:
+    | '/'
+    | '/agenda'
+    | '/apostilas'
+    | '/boletim'
+    | '/ia'
+    | '/inteligencia-artificial'
+    | '/presenca'
+    | '/tarefas'
+    | '/api/sed/$'
   fileRoutesByTo: FileRoutesByTo
-  to: '/' | '/$' | '/leiasp' | '/plataformas' | '/api/public/sdf/$'
-  id: '__root__' | '/' | '/$' | '/leiasp' | '/plataformas' | '/api/public/sdf/$'
+  to:
+    | '/'
+    | '/agenda'
+    | '/apostilas'
+    | '/boletim'
+    | '/ia'
+    | '/inteligencia-artificial'
+    | '/presenca'
+    | '/tarefas'
+    | '/api/sed/$'
+  id:
+    | '__root__'
+    | '/'
+    | '/agenda'
+    | '/apostilas'
+    | '/boletim'
+    | '/ia'
+    | '/inteligencia-artificial'
+    | '/presenca'
+    | '/tarefas'
+    | '/api/sed/$'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
-  SplatRoute: typeof SplatRoute
-  LeiaspRoute: typeof LeiaspRoute
-  PlataformasRoute: typeof PlataformasRoute
-  ApiPublicSdfSplatRoute: typeof ApiPublicSdfSplatRoute
+  AgendaRoute: typeof AgendaRoute
+  ApostilasRoute: typeof ApostilasRoute
+  BoletimRoute: typeof BoletimRoute
+  IaRoute: typeof IaRoute
+  InteligenciaArtificialRoute: typeof InteligenciaArtificialRoute
+  PresencaRoute: typeof PresencaRoute
+  TarefasRoute: typeof TarefasRoute
+  ApiSedSplatRoute: typeof ApiSedSplatRoute
 }
 
 declare module '@tanstack/react-router' {
@@ -88,32 +156,60 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof IndexRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/$': {
-      id: '/$'
-      path: '/$'
-      fullPath: '/$'
-      preLoaderRoute: typeof SplatRouteImport
+    '/agenda': {
+      id: '/agenda'
+      path: '/agenda'
+      fullPath: '/agenda'
+      preLoaderRoute: typeof AgendaRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/leiasp': {
-      id: '/leiasp'
-      path: '/leiasp'
-      fullPath: '/leiasp'
-      preLoaderRoute: typeof LeiaspRouteImport
+    '/apostilas': {
+      id: '/apostilas'
+      path: '/apostilas'
+      fullPath: '/apostilas'
+      preLoaderRoute: typeof ApostilasRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/plataformas': {
-      id: '/plataformas'
-      path: '/plataformas'
-      fullPath: '/plataformas'
-      preLoaderRoute: typeof PlataformasRouteImport
+    '/boletim': {
+      id: '/boletim'
+      path: '/boletim'
+      fullPath: '/boletim'
+      preLoaderRoute: typeof BoletimRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/api/public/sdf/$': {
-      id: '/api/public/sdf/$'
-      path: '/api/public/sdf/$'
-      fullPath: '/api/public/sdf/$'
-      preLoaderRoute: typeof ApiPublicSdfSplatRouteImport
+    '/ia': {
+      id: '/ia'
+      path: '/ia'
+      fullPath: '/ia'
+      preLoaderRoute: typeof IaRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/inteligencia-artificial': {
+      id: '/inteligencia-artificial'
+      path: '/inteligencia-artificial'
+      fullPath: '/inteligencia-artificial'
+      preLoaderRoute: typeof InteligenciaArtificialRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/presenca': {
+      id: '/presenca'
+      path: '/presenca'
+      fullPath: '/presenca'
+      preLoaderRoute: typeof PresencaRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/tarefas': {
+      id: '/tarefas'
+      path: '/tarefas'
+      fullPath: '/tarefas'
+      preLoaderRoute: typeof TarefasRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/sed/$': {
+      id: '/api/sed/$'
+      path: '/api/sed/$'
+      fullPath: '/api/sed/$'
+      preLoaderRoute: typeof ApiSedSplatRouteImport
       parentRoute: typeof rootRouteImport
     }
   }
@@ -121,21 +217,24 @@ declare module '@tanstack/react-router' {
 
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
-  SplatRoute: SplatRoute,
-  LeiaspRoute: LeiaspRoute,
-  PlataformasRoute: PlataformasRoute,
-  ApiPublicSdfSplatRoute: ApiPublicSdfSplatRoute,
+  AgendaRoute: AgendaRoute,
+  ApostilasRoute: ApostilasRoute,
+  BoletimRoute: BoletimRoute,
+  IaRoute: IaRoute,
+  InteligenciaArtificialRoute: InteligenciaArtificialRoute,
+  PresencaRoute: PresencaRoute,
+  TarefasRoute: TarefasRoute,
+  ApiSedSplatRoute: ApiSedSplatRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)
   ._addFileTypes<FileRouteTypes>()
 
 import type { getRouter } from './router.tsx'
-import type { startInstance } from './start.ts'
+import type { createStart } from '@tanstack/react-start'
 declare module '@tanstack/react-start' {
   interface Register {
     ssr: true
     router: Awaited<ReturnType<typeof getRouter>>
-    config: Awaited<ReturnType<typeof startInstance.getOptions>>
   }
 }
