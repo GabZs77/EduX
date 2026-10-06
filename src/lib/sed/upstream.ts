@@ -675,6 +675,22 @@ async function fetchFrequenciaBimestre(cdUsuarioCurto, token, bimestre, anoLetiv
   return { ok: !!resp.ok, status: resp.status, data };
 }
 
+function currentBimestreFromCalendar(date = new Date()) {
+  const month = date.getMonth() + 1;
+  if (month <= 4) return 1;
+  if (month <= 7) return 2;
+  if (month <= 10) return 3;
+  return 4;
+}
+
+async function fetchFrequenciaBimestreAtual(cdUsuarioCurto, token) {
+  const { resp, data } = await sedGet(
+    `apiboletim/api/Frequencia/GetFrequenciaBimestreAtual?codigoAluno=${encodeURIComponent(cdUsuarioCurto)}`,
+    { subKey: SUBSCRIPTION_KEYS.boletim, token },
+  );
+  return { ok: !!resp.ok, status: resp.status, data };
+}
+
 function extractFaltasBimestre(data) {
   const exactKeys = ["faltasBimestreAtual", "FaltasBimestreAtual", "totalFaltasBimestre", "TotalFaltasBimestre", "quantidadeFaltasBimestre", "QuantidadeFaltasBimestre", "totalFaltas", "TotalFaltas", "faltas", "Faltas"];
   const seen = new WeakSet();
@@ -1455,7 +1471,7 @@ async function handleNotas(request, url) {
 
 // ConsultaFrequenciaBimestre devolve uma linha por disciplina com
 // numeroFaltasBimestre / numeroPresencasBimestre / porcentagemPresenca.
-function normalizeFrequenciaBimestre(bimestre, data) {
+function normalizeFrequenciaBimestre(bimestre, data, atual = false) {
   const rows = unwrapSedList(data).filter((row) => row && typeof row === "object");
   if (!rows.length) return null;
   let faltas = 0;
@@ -1464,9 +1480,9 @@ function normalizeFrequenciaBimestre(bimestre, data) {
   let qtdPct = 0;
   const disciplinas = [];
   for (const row of rows) {
-    const f = numberValue(row?.numeroFaltasBimestre ?? row?.NumeroFaltasBimestre ?? row?.faltas ?? row?.Faltas ?? row?.totalFaltas ?? row?.TotalFaltas) || 0;
+    const f = numberValue(row?.numeroFaltasBimestre ?? row?.NumeroFaltasBimestre ?? row?.faltasBimestreAtual ?? row?.FaltasBimestreAtual ?? row?.faltas ?? row?.Faltas ?? row?.totalFaltas ?? row?.TotalFaltas) || 0;
     let p = numberValue(row?.numeroPresencasBimestre ?? row?.NumeroPresencasBimestre ?? row?.numeroPresencas ?? row?.NumeroPresencas ?? row?.presencas ?? row?.Presencas ?? row?.totalPresencas ?? row?.TotalPresencas) || 0;
-    const pct = numberValue(row?.porcentagemPresenca ?? row?.PorcentagemPresenca ?? row?.frequencia ?? row?.Frequencia ?? row?.percentualFrequencia ?? row?.PercentualFrequencia);
+    const pct = numberValue(row?.porcentagemPresenca ?? row?.PorcentagemPresenca ?? row?.porcentagemPresencaBimestreAtual ?? row?.PorcentagemPresencaBimestreAtual ?? row?.frequencia ?? row?.Frequencia ?? row?.percentualFrequencia ?? row?.PercentualFrequencia);
     if (p === 0 && f > 0 && pct !== null && pct > 0 && pct < 100) {
       const aulasEstimadas = Math.round(f / (1 - pct / 100));
       p = Math.max(0, aulasEstimadas - f);
@@ -1475,7 +1491,7 @@ function normalizeFrequenciaBimestre(bimestre, data) {
     presencas += p;
     if (pct !== null) { somaPct += pct; qtdPct += 1; }
     disciplinas.push({
-      nomeDisciplina: toTitleCase(row?.nomeDisciplina || "Disciplina"),
+      nomeDisciplina: toTitleCase(row?.nomeDisciplina || row?.NomeDisciplina || "Disciplina"),
       faltas: f,
       presencas: p,
       frequencia: pct,
@@ -1500,15 +1516,25 @@ async function handleFrequencia(request, url) {
   const ano = url.searchParams.get("ano") || "";
   const requested = url.searchParams.get("bimestre");
   const bimestres = requested ? [Number(requested) || 1] : [1, 2, 3, 4];
-  const results = await Promise.all(bimestres.map((b) => fetchFrequenciaBimestre(cdUsuario, token, b, ano)));
+  const atualNumero = currentBimestreFromCalendar();
+  const [results, atualResult] = await Promise.all([
+    Promise.all(bimestres.map((b) => fetchFrequenciaBimestre(cdUsuario, token, b, ano))),
+    !requested ? fetchFrequenciaBimestreAtual(cdUsuario, token) : Promise.resolve(null),
+  ]);
   const list = [];
   results.forEach((res, index) => {
     const normalized = normalizeFrequenciaBimestre(bimestres[index], res.data);
     if (normalized) list.push(normalized);
   });
+  const atual = atualResult ? normalizeFrequenciaBimestre(atualNumero, atualResult.data, true) : null;
+  if (atual) {
+    const index = list.findIndex((item) => item.bimestre === atualNumero);
+    if (index >= 0) list[index] = atual;
+    else list.push(atual);
+  }
   const faltas = await fetchFaltas(cdUsuario, token);
   const total = faltas.total ?? list.reduce((acc, item) => acc + (item.faltas || 0), 0);
-  return jsonResponse({ ok: results.some((r) => r.ok), data: list, faltas: total, faltasBimestreAtual: total });
+  return jsonResponse({ ok: results.some((r) => r.ok) || Boolean(atualResult?.ok), data: list, faltas: total, faltasBimestreAtual: total });
 }
 
 
