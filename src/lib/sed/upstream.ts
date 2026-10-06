@@ -8,9 +8,12 @@ const SUBSCRIPTION_KEYS = {
 };
 
 const EXTRA_TARGETS = ["1052", "1820", "764"];
-const EDUSP_BASE = "https://edusp-api.ip.tv";
+const RUNTIME_ENV = typeof process !== "undefined" && process.env ? process.env : {};
 const SED_BASE = "https://sedintegracoes.educacao.sp.gov.br";
-const WORKER_BUILD = "sdf-flash-v24-20261006-pending-answer-status";
+const SED_VALIDA_URL = RUNTIME_ENV.SED_VALIDA_URL || `${SED_BASE}/saladofuturobffapi/credenciais/api/ValidarToken`;
+const EDUSP_BASE = String(RUNTIME_ENV.IPTV_BASE_URL || "https://edusp-api.ip.tv").replace(/\/+$/, "");
+const IPTV_TOKEN_URL = RUNTIME_ENV.IPTV_TOKEN_URL || `${EDUSP_BASE}/registration/edusp/token`;
+const WORKER_BUILD = "sdf-flash-v25-20261006-cloudflare-login-fallback";
 
 const GROQ_API_KEY = "";
 const GROQ_URL = "https://api.x.ai/v1/chat/completions";
@@ -64,7 +67,74 @@ async function readJson(resp) {
   const text = await resp.text();
   try { return JSON.parse(text); } catch { return { raw: text }; }
 }
-
+function cookieHeaderFromSetCookie(headers) {
+  const cookies = typeof headers.getSetCookie === "function"
+    ? headers.getSetCookie()
+    : [headers.get("set-cookie")].filter(Boolean);
+  return cookies.map((cookie) => String(cookie).split(";", 1)[0]).filter(Boolean).join("; ");
+}
+async function exchangeEduspToken(token) {
+  const headerVariants = [
+    {
+      ...UPSTREAM_HEADERS,
+      "content-type": "application/json",
+      "x-api-platform": "webclient",
+      "x-api-realm": "edusp",
+      "sec-fetch-mode": "cors",
+      "sec-fetch-site": "same-site",
+      "sec-fetch-dest": "empty",
+    },
+    {
+      ...UPSTREAM_HEADERS,
+      "content-type": "application/json",
+      "x-api-platform": "webclient",
+      "x-api-realm": "edusp",
+    },
+  ];
+  let lastResp = null;
+  let lastData = null;
+  let lastError = null;
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    try {
+      const resp = await fetch(IPTV_TOKEN_URL, {
+        method: "POST",
+        headers: headerVariants[Math.min(attempt, headerVariants.length - 1)],
+        body: JSON.stringify({ token }),
+      });
+      const data = await readJson(resp);
+      lastResp = resp;
+      lastData = data;
+      if (resp.ok && data?.auth_token) return { resp, data };
+      if (![403, 429, 500, 502, 503, 504].includes(resp.status)) break;
+    } catch (error) {
+      lastError = error;
+    }
+    if (attempt < 2) await new Promise((resolve) => setTimeout(resolve, 350 * (attempt + 1)));
+  }
+  return {
+    resp: lastResp || { ok: false, status: 502 },
+    data: lastData || { erro: String(lastError?.message || lastError || "Falha de rede ao contatar o Sala do Futuro") },
+  };
+}
+async function validateSedToken(token, cookieHeader = "") {
+  const headers = {
+    Accept: "application/json, text/plain, */*",
+    Authorization: `Bearer ${token}`,
+    "Ocp-Apim-Subscription-Key": SUBSCRIPTION_KEYS.login,
+    "x-product-name": "SalaDoFuturo",
+  };
+  if (cookieHeader) headers.Cookie = cookieHeader;
+  const resp = await fetch(SED_VALIDA_URL, { method: "POST", headers });
+  return { resp, data: await readJson(resp) };
+}
+function upstreamErrorMessage(data, status) {
+  const raw = String(data?.message || data?.error || data?.erro || data?.raw || "");
+  if (status === 403 && /just a moment|cloudflare|challenge-platform|enable javascript and cookies/i.test(raw)) {
+    return "O Sala do Futuro bloqueou temporariamente a abertura da sessão por uma proteção anti-bot (Cloudflare).";
+  }
+  return raw.replace(/<[^>]*>/g, " ").replace(/\s+/g, " ").trim().slice(0, 300)
+    || "O serviço da Sala do Futuro não retornou uma mensagem detalhada.";
+}
 // Algumas rotas SED aceitam o caminho com o prefixo /saladofuturobffapi e outras
 // só respondem sem o prefixo (com prefixo devolvem 401). Tentamos as duas formas,
 // com e sem Bearer, e devolvemos a primeira resposta que funcionar.
@@ -1181,16 +1251,56 @@ async function handleLogin(request) {
   const loginData = await readJson(loginResp);
   const dados = loginData?.DadosUsuario || {};
   if (!loginResp.ok || !loginData?.token || !dados) return jsonResponse({ erro: "Usuário ou senha inválidos", detalhe: loginData }, loginResp.status >= 400 ? loginResp.status : 401);
-  const token = loginData.token;
+  const token = String(loginData.token || "").trim();
   const cdUsuario = Number(dados.CD_USUARIO || 0);
   const username = dados.NM_NICK || loginData?.nick || "";
-  const tokenResp = await fetch(`${EDUSP_BASE}/registration/edusp/token`, {
-    method: "POST",
-    headers: { ...UPSTREAM_HEADERS, "content-type": "application/json", "x-api-platform": "webclient", "x-api-realm": "edusp" },
-    body: JSON.stringify({ token }),
-  });
-  const tokenData = await readJson(tokenResp);
-  if (!tokenResp.ok || !tokenData?.auth_token) return jsonResponse({ erro: "Login ok, mas não foi possível abrir a sessão do Sala do Futuro", detalhe: tokenData }, tokenResp.status || 401);
+  const { resp: tokenResp, data: tokenData } = await exchangeEduspToken(token);
+  let validation;
+  try {
+    validation = await validateSedToken(token, cookieHeaderFromSetCookie(loginResp.headers));
+  } catch {
+    return jsonResponse({
+      erro: "A SED retornou um token de login, mas não foi possível validá-lo agora. Tente novamente; nenhuma sessão foi salva.",
+      stage: "sed-validation",
+      retryable: true,
+    }, 503);
+  }
+  const validationStatus = Number(validation.data?.statusCode || 0);
+  const validationMessage = String(validation.data?.statusRetorno || "").trim();
+  const tokenValidated = validation.resp.ok && validationStatus === 200
+    && validationMessage.toLocaleLowerCase("pt-BR") === "acesso permitido!";
+  if (!tokenValidated) {
+    const retryable = !validation.resp.status || validation.resp.status === 429 || validation.resp.status >= 500;
+    const status = retryable ? 503 : (validation.resp.status >= 400 ? validation.resp.status : 401);
+    return jsonResponse({
+      erro: `A SED não confirmou o token retornado pelo login${validation.resp.status ? ` (HTTP ${validation.resp.status})` : ""}: ${validationMessage || "resposta de validação inesperada"}. Nenhuma sessão foi salva.`,
+      stage: "sed-validation",
+      retryable,
+      upstream_status: validation.resp.status || 0,
+    }, status);
+  }
+  if (!tokenResp.ok || !tokenData?.auth_token) {
+    const upstreamStatus = tokenResp.status || 0;
+    const upstreamMsg = upstreamErrorMessage(tokenData, upstreamStatus);
+    if (upstreamStatus === 403 && /Cloudflare/i.test(upstreamMsg)) {
+      return jsonResponse({
+        nome: dados.NAME || "Aluno",
+        apelido: username,
+        email: dados.EMAIL || "",
+        cdUsuario,
+        cdUsuarioCurto: String(Math.trunc(cdUsuario / 10)),
+        token,
+        token2: token,
+        eduspUnavailable: true,
+        aviso: upstreamMsg,
+      });
+    }
+    return jsonResponse({
+      erro: `Login ok, mas não foi possível abrir a sessão do Sala do Futuro (HTTP ${upstreamStatus}): ${upstreamMsg}`,
+      detalhe: tokenData,
+      upstream_status: upstreamStatus,
+    }, tokenResp.status || 401);
+  }
   const eduspNick = String(tokenData.nick || tokenData.username || username || "").trim();
   return jsonResponse({ nome: dados.NAME || "Aluno", apelido: eduspNick || username, email: dados.EMAIL || "", cdUsuario, cdUsuarioCurto: String(Math.trunc(cdUsuario / 10)), token, token2: tokenData.auth_token });
 }
