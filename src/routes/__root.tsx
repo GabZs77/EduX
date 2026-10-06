@@ -12,7 +12,7 @@ export const Route = createRootRoute({
       { charSet: "utf-8" },
       { name: "viewport", content: "width=device-width, initial-scale=1" },
       { title: APP_NAME },
-      { name: "description", content: "Agenda, presença, notas, tarefas e materiais do aluno." },
+      { name: "description", content: "Agenda, presença anual, notas, boletim, tarefas e materiais do aluno." },
       { name: "theme-color", content: "#10171f" },
     ],
     links: [

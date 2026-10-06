@@ -63,12 +63,13 @@ export function LoginPage() {
         </div>
         <div className="login-copy">
           <span className="eyebrow">Acesso do aluno</span>
-          <h1>Agenda, presença e notas em um só lugar.</h1>
-          <p>Entre para consultar seus horários, acompanhar a frequência, conferir suas notas e resolver suas atividades.</p>
+          <h1>Notas, boletim e rotina escolar em um só lugar.</h1>
+          <p>Consulte suas avaliações, o boletim por bimestre, a frequência, a agenda e suas atividades.</p>
           <div className="login-utility-list" aria-label="Recursos acadêmicos">
             <span>Agenda</span>
             <span>Presença</span>
             <span>Notas</span>
+            <span>Boletim</span>
             <span>Tarefas</span>
           </div>
         </div>

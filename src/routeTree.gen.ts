@@ -15,6 +15,7 @@ import { Route as ApostilasRouteImport } from './routes/apostilas'
 import { Route as BoletimRouteImport } from './routes/boletim'
 import { Route as IaRouteImport } from './routes/ia'
 import { Route as InteligenciaArtificialRouteImport } from './routes/inteligencia-artificial'
+import { Route as NotasRouteImport } from './routes/notas'
 import { Route as PresencaRouteImport } from './routes/presenca'
 import { Route as TarefasRouteImport } from './routes/tarefas'
 import { Route as ApiSedSplatRouteImport } from './routes/api/sed/$'
@@ -49,6 +50,11 @@ const InteligenciaArtificialRoute = InteligenciaArtificialRouteImport.update({
   path: '/inteligencia-artificial',
   getParentRoute: () => rootRouteImport,
 } as any)
+const NotasRoute = NotasRouteImport.update({
+  id: '/notas',
+  path: '/notas',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const PresencaRoute = PresencaRouteImport.update({
   id: '/presenca',
   path: '/presenca',
@@ -72,6 +78,7 @@ export interface FileRoutesByFullPath {
   '/boletim': typeof BoletimRoute
   '/ia': typeof IaRoute
   '/inteligencia-artificial': typeof InteligenciaArtificialRoute
+  '/notas': typeof NotasRoute
   '/presenca': typeof PresencaRoute
   '/tarefas': typeof TarefasRoute
   '/api/sed/$': typeof ApiSedSplatRoute
@@ -83,6 +90,7 @@ export interface FileRoutesByTo {
   '/boletim': typeof BoletimRoute
   '/ia': typeof IaRoute
   '/inteligencia-artificial': typeof InteligenciaArtificialRoute
+  '/notas': typeof NotasRoute
   '/presenca': typeof PresencaRoute
   '/tarefas': typeof TarefasRoute
   '/api/sed/$': typeof ApiSedSplatRoute
@@ -95,6 +103,7 @@ export interface FileRoutesById {
   '/boletim': typeof BoletimRoute
   '/ia': typeof IaRoute
   '/inteligencia-artificial': typeof InteligenciaArtificialRoute
+  '/notas': typeof NotasRoute
   '/presenca': typeof PresencaRoute
   '/tarefas': typeof TarefasRoute
   '/api/sed/$': typeof ApiSedSplatRoute
@@ -108,6 +117,7 @@ export interface FileRouteTypes {
     | '/boletim'
     | '/ia'
     | '/inteligencia-artificial'
+    | '/notas'
     | '/presenca'
     | '/tarefas'
     | '/api/sed/$'
@@ -119,6 +129,7 @@ export interface FileRouteTypes {
     | '/boletim'
     | '/ia'
     | '/inteligencia-artificial'
+    | '/notas'
     | '/presenca'
     | '/tarefas'
     | '/api/sed/$'
@@ -130,6 +141,7 @@ export interface FileRouteTypes {
     | '/boletim'
     | '/ia'
     | '/inteligencia-artificial'
+    | '/notas'
     | '/presenca'
     | '/tarefas'
     | '/api/sed/$'
@@ -142,6 +154,7 @@ export interface RootRouteChildren {
   BoletimRoute: typeof BoletimRoute
   IaRoute: typeof IaRoute
   InteligenciaArtificialRoute: typeof InteligenciaArtificialRoute
+  NotasRoute: typeof NotasRoute
   PresencaRoute: typeof PresencaRoute
   TarefasRoute: typeof TarefasRoute
   ApiSedSplatRoute: typeof ApiSedSplatRoute
@@ -191,6 +204,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof InteligenciaArtificialRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/notas': {
+      id: '/notas'
+      path: '/notas'
+      fullPath: '/notas'
+      preLoaderRoute: typeof NotasRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/presenca': {
       id: '/presenca'
       path: '/presenca'
@@ -222,6 +242,7 @@ const rootRouteChildren: RootRouteChildren = {
   BoletimRoute: BoletimRoute,
   IaRoute: IaRoute,
   InteligenciaArtificialRoute: InteligenciaArtificialRoute,
+  NotasRoute: NotasRoute,
   PresencaRoute: PresencaRoute,
   TarefasRoute: TarefasRoute,
   ApiSedSplatRoute: ApiSedSplatRoute,

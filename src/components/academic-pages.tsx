@@ -12,6 +12,7 @@ import {
 } from "lucide-react";
 import { useEffect, useState } from "react";
 import { APOSTILAS } from "@/lib/sed/apostilas";
+import { latestAttendanceBimestre, summarizeAttendanceYear } from "@/lib/sed/attendance";
 import {
   fetchAgenda,
   fetchBoletim,
@@ -24,7 +25,7 @@ import {
   weekdayShort,
   workday,
 } from "@/lib/sed/client";
-import type { AgendaEvent, BoletimRow, FrequenciaBimestre, Task } from "@/lib/sed/types";
+import type { AgendaEvent, Avaliacao, BoletimRow, FrequenciaBimestre, Task } from "@/lib/sed/types";
 import { PageHeading, simpleMarkdown, StatCard, StateCard } from "./page-ui";
 import { PdfReader } from "./pdf-reader";
 import { useStudent } from "./student-context";
@@ -228,19 +229,25 @@ export function AgendaPage() {
 export function PresencaPage() {
   const { dashboard, loading } = useStudent();
   const [rows, setRows] = useState<FrequenciaBimestre[]>([]);
-  const [faltas, setFaltas] = useState<number | null>(dashboard?.faltas ?? null);
+  const [faltasBimestreAtual, setFaltasBimestreAtual] = useState<number | null>(dashboard?.faltas ?? null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
-  const [bimestre, setBimestre] = useState(0);
+  const [bimestreAtual, setBimestreAtual] = useState<number | null>(null);
+  const [bimestreSelecionado, setBimestreSelecionado] = useState<number | null>(null);
 
   async function reload() {
     setBusy(true);
     setError("");
     try {
       const result = await fetchFrequencia();
-      setRows(result.data || []);
-      setFaltas(result.faltasBimestreAtual ?? result.faltas ?? null);
-      if (result.data?.length) setBimestre(result.data.length - 1);
+      const data = result.data || [];
+      const latest = latestAttendanceBimestre(data);
+      setRows(data);
+      setBimestreAtual(latest?.bimestre ?? null);
+      setBimestreSelecionado((previous) =>
+        data.some((row) => row.bimestre === previous) ? previous : latest?.bimestre ?? data.at(-1)?.bimestre ?? null,
+      );
+      setFaltasBimestreAtual(result.faltasBimestreAtual ?? result.faltas ?? latest?.faltas ?? null);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Não foi possível carregar a frequência.");
     } finally {
@@ -253,45 +260,65 @@ export function PresencaPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const current = rows[bimestre];
-  const freq = current?.frequencia ?? 0;
+  const current = rows.find((row) => row.bimestre === bimestreAtual);
+  const selected = rows.find((row) => row.bimestre === bimestreSelecionado) ?? current;
+  const annual = summarizeAttendanceYear(rows, bimestreAtual ?? 0);
+  const annualFrequency = annual.frequencia ?? 0;
 
   return (
     <div className="page-stack">
       <PageHeading
         eyebrow="Frequência"
         title="Presença"
-        description="Acompanhe faltas, aulas dadas e o percentual de presença por bimestre."
+        description="Acompanhe o bimestre atual, cada período e sua presença acumulada no ano."
         onRefresh={() => void reload()}
         spinning={busy || loading}
       />
       {error ? <StateCard error title="Frequência indisponível" message={error} actionLabel="Tentar de novo" onAction={() => void reload()} /> : null}
       <section className="stat-grid attendance-stats">
-        <StatCard icon={<CalendarClock size={16} />} label="Faltas no bimestre" value={String(faltas ?? "—")} note="Lançadas na SED" tone="amber" />
-        <StatCard icon={<CalendarDays size={16} />} label="Aulas dadas" value={String(current?.aulasDadas ?? "—")} note="No período selecionado" tone="cyan" />
-        <StatCard icon={<ListChecks size={16} />} label="Presença" value={current?.frequencia != null ? `${current.frequencia}%` : "—"} note="Média das disciplinas" tone="green" />
-        <StatCard icon={<BookOpen size={16} />} label="Disciplinas" value={String(current?.disciplinas.length ?? 0)} note="Com lançamento" />
+        <StatCard icon={<CalendarClock size={16} />} label="Faltas no bimestre atual" value={String(faltasBimestreAtual ?? current?.faltas ?? "—")} note={current?.descricaoBimestre || "Lançadas na SED"} tone="amber" />
+        <StatCard icon={<CalendarDays size={16} />} label="Aulas no bimestre atual" value={String(current?.aulasDadas ?? "—")} note="Aulas registradas" tone="cyan" />
+        <StatCard icon={<ListChecks size={16} />} label="Presença no bimestre atual" value={current?.frequencia != null ? `${current.frequencia}%` : "—"} note="Média das disciplinas" tone="green" />
+        <StatCard icon={<BookOpen size={16} />} label="Presença anual" value={annual.frequencia != null ? `${annual.frequencia}%` : "—"} note={annual.aulasDadas ? `${annual.presencas} presenças · ${annual.faltas} faltas` : "Ano inteiro até agora"} />
+      </section>
+      <section className="progress-card attendance-year-card">
+        <div className="section-heading">
+          <div>
+            <span className="eyebrow">Ano inteiro até agora</span>
+            <h2>Presença anual</h2>
+          </div>
+          <strong>{annual.frequencia != null ? `${annual.frequencia}%` : "—"}</strong>
+        </div>
+        <div className="progress-track">
+          <span style={{ width: `${Math.max(0, Math.min(100, annualFrequency))}%` }} />
+        </div>
+        <p className="data-note">
+          <Info size={14} />
+          {annual.aulasDadas > 0
+            ? `${annual.presencas} presenças e ${annual.faltas} faltas em ${annual.aulasDadas} aulas até o ${bimestreAtual}º bimestre com lançamentos.`
+            : "Ainda não há aulas lançadas para calcular o acumulado anual."}
+        </p>
       </section>
       <section className="progress-card">
         <div className="section-heading">
-          <h2>{current?.descricaoBimestre || "Bimestre atual"}</h2>
-          <strong>{current?.frequencia != null ? `${current.frequencia}%` : "—"}</strong>
+          <h2>{selected?.descricaoBimestre || "Bimestre selecionado"}</h2>
+          <strong>{selected?.frequencia != null ? `${selected.frequencia}%` : "—"}</strong>
         </div>
         <div className="progress-track">
-          <span style={{ width: `${Math.max(0, Math.min(100, freq))}%` }} />
+          <span style={{ width: `${Math.max(0, Math.min(100, selected?.frequencia ?? 0))}%` }} />
         </div>
       </section>
       {rows.length ? (
         <div className="period-tabs">
-          {rows.map((row, i) => (
-            <button key={row.bimestre} type="button" className={i === bimestre ? "active" : ""} onClick={() => setBimestre(i)}>
-              {row.bimestre}º Bim
+          {rows.map((row) => (
+            <button key={row.bimestre} type="button" className={row.bimestre === bimestreSelecionado ? "active" : ""} onClick={() => setBimestreSelecionado(row.bimestre)}>
+              {row.bimestre}º Bim{row.bimestre === bimestreAtual ? " · atual" : ""}
             </button>
           ))}
         </div>
       ) : null}
       <div className="period-list">
-        {(current?.disciplinas || []).map((item) => (
+        {(selected?.disciplinas || []).map((item) => (
           <article className="period-card" key={item.nomeDisciplina}>
             <div>
               <h3>{item.nomeDisciplina}</h3>
@@ -338,9 +365,9 @@ export function BoletimPage() {
   return (
     <div className="page-stack">
       <PageHeading
-        eyebrow="Avaliações"
-        title="Notas"
-        description="Acompanhe suas notas por disciplina e bimestre."
+        eyebrow="Boletim"
+        title="Boletim"
+        description="Consulte notas, faltas e médias finais por disciplina e bimestre."
         onRefresh={() => void reload()}
         spinning={busy}
       />
@@ -378,8 +405,95 @@ export function BoletimPage() {
           })}
         </div>
       ) : (
-        <StateCard title="Notas ainda não disponíveis" message="Não encontramos notas para este bimestre nas APIs disponíveis para sua sessão." />
+        <StateCard title="Boletim ainda não disponível" message="Não encontramos notas para este bimestre nas APIs disponíveis para sua sessão." />
       )}
+    </div>
+  );
+}
+
+export function NotasPage() {
+  const [rows, setRows] = useState<Avaliacao[]>([]);
+  const [busy, setBusy] = useState(true);
+  const [error, setError] = useState("");
+  const [bimestreSelecionado, setBimestreSelecionado] = useState<number | null>(null);
+
+  async function reload() {
+    setBusy(true);
+    setError("");
+    try {
+      const result = await fetchNotas();
+      setRows(result.data || []);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Não foi possível carregar as notas.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  useEffect(() => {
+    void reload();
+  }, []);
+
+  const bimestres = [...new Set(rows.map((row) => row.bimestre).filter((value): value is number => value !== null))].sort((a, b) => a - b);
+  const filtered = bimestreSelecionado === null ? rows : rows.filter((row) => row.bimestre === bimestreSelecionado);
+
+  return (
+    <div className="page-stack">
+      <PageHeading
+        eyebrow="Avaliações"
+        title="Notas"
+        description="Consulte as notas de provas e trabalhos lançados por disciplina."
+        onRefresh={() => void reload()}
+        spinning={busy}
+      />
+      {error ? <StateCard error title="Notas indisponíveis" message={error} actionLabel="Tentar de novo" onAction={() => void reload()} /> : null}
+      <div className="period-tabs">
+        <button type="button" className={bimestreSelecionado === null ? "active" : ""} onClick={() => setBimestreSelecionado(null)}>
+          Todas
+        </button>
+        {bimestres.map((periodo) => (
+          <button key={periodo} type="button" className={bimestreSelecionado === periodo ? "active" : ""} onClick={() => setBimestreSelecionado(periodo)}>
+            {periodo}º Bim
+          </button>
+        ))}
+      </div>
+      <div className="grade-head">
+        <span>Avaliação</span>
+        <span>Peso</span>
+        <span>Nota</span>
+      </div>
+      {filtered.length ? (
+        <div className="grade-list">
+          {filtered.map((row) => {
+            const tone = row.nota == null ? "" : row.nota >= 6 ? "positive" : "warning";
+            const date = row.data && /^\d{4}-\d{2}-\d{2}/.test(row.data) ? row.data.slice(0, 10).split("-").reverse().join("/") : row.data;
+            const detail = [row.disciplina || "Disciplina não informada", date, row.bimestre != null ? `${row.bimestre}º bimestre` : null]
+              .filter(Boolean)
+              .join(" · ");
+            return (
+              <article className="grade-card" key={row.id}>
+                <span className="subject-star">
+                  <Star size={14} />
+                </span>
+                <div className="grade-copy">
+                  <h3>{row.prova}</h3>
+                  <p>{detail}</p>
+                </div>
+                <div className="grade-value">{row.peso != null ? `Peso ${row.peso}` : "—"}</div>
+                <div className={`grade-value ${tone}`}>{fmtNota(row.nota)}</div>
+              </article>
+            );
+          })}
+        </div>
+      ) : (
+        <StateCard
+          title={bimestreSelecionado === null ? "Nenhuma avaliação encontrada" : "Nenhuma nota neste bimestre"}
+          message="Quando a escola lançar provas ou trabalhos, as notas aparecerão aqui."
+        />
+      )}
+      <p className="data-note">
+        <Info size={14} /> Notas individuais de avaliações. Para consultar o resumo consolidado, acesse a aba Boletim.
+      </p>
     </div>
   );
 }

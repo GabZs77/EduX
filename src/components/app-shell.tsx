@@ -20,11 +20,13 @@ const NAV = [
   { href: "/", label: "Início", short: "Início", icon: Home },
   { href: "/agenda", label: "Agenda", short: "Agenda", icon: CalendarDays },
   { href: "/presenca", label: "Presença", short: "Presença", icon: UserRound },
-  { href: "/boletim", label: "Notas", short: "Notas", icon: GraduationCap },
+  { href: "/notas", label: "Notas", short: "Notas", icon: GraduationCap },
+  { href: "/boletim", label: "Boletim", short: "Boletim", icon: BookOpen },
   { href: "/tarefas", label: "Tarefas", short: "Tarefas", icon: ListTodo },
   { href: "/apostilas", label: "Apostilas", short: "Apostilas", icon: BookOpen },
   { href: "/inteligencia-artificial", label: "Inteligência Artificial", short: "IA", icon: Sparkles },
 ];
+const MOBILE_NAV = NAV.filter((item) => ["/", "/presenca", "/notas", "/boletim", "/tarefas"].includes(item.href));
 
 export function AppShell({ children }: { children: ReactNode }) {
   const pathname = useRouterState({ select: (s) => s.location.pathname });
@@ -104,7 +106,7 @@ export function AppShell({ children }: { children: ReactNode }) {
         </header>
         <div className="page-content">{children}</div>
         <nav className="bottom-nav" aria-label="Navegação mobile">
-          {NAV.slice(0, 5).map((item) => {
+          {MOBILE_NAV.map((item) => {
             const Icon = item.icon;
             return (
               <Link key={item.href} to={item.href} className={`bottom-link ${active === item.href ? "active" : ""}`}>
