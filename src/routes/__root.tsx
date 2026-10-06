@@ -4,7 +4,7 @@ import { PreviewHostBridge } from "@/components/preview-host-bridge";
 import { StudentProvider } from "@/components/student-context";
 import appCss from "../styles.css?url";
 
-const APP_NAME = "EduX — Notas";
+const APP_NAME = "EduX — Plataforma Estudantil";
 
 export const Route = createRootRoute({
   head: () => ({
@@ -12,7 +12,7 @@ export const Route = createRootRoute({
       { charSet: "utf-8" },
       { name: "viewport", content: "width=device-width, initial-scale=1" },
       { title: APP_NAME },
-      { name: "description", content: "Consulte suas notas escolares por disciplina e bimestre." },
+      { name: "description", content: "Agenda, presença, notas, tarefas e materiais do aluno." },
       { name: "theme-color", content: "#10171f" },
     ],
     links: [

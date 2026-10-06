@@ -1,0 +1,12 @@
+{
+  "routes": [
+    { "path": "/", "title": "Início" },
+    { "path": "/agenda", "title": "Agenda" },
+    { "path": "/presenca", "title": "Presença" },
+    { "path": "/boletim", "title": "Notas" },
+    { "path": "/tarefas", "title": "Tarefas" },
+    { "path": "/apostilas", "title": "Apostilas" },
+    { "path": "/inteligencia-artificial", "title": "Inteligência Artificial" },
+    { "path": "/ia", "title": "Redirecionar para Inteligência Artificial" }
+  ]
+}

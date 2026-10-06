@@ -16,7 +16,15 @@ import { useState, type ReactNode } from "react";
 import { firstName, initials } from "@/lib/sed/client";
 import { useStudent } from "./student-context";
 
-const NAV = [{ href: "/", label: "Notas", short: "Notas", icon: GraduationCap }];
+const NAV = [
+  { href: "/", label: "Início", short: "Início", icon: Home },
+  { href: "/agenda", label: "Agenda", short: "Agenda", icon: CalendarDays },
+  { href: "/presenca", label: "Presença", short: "Presença", icon: UserRound },
+  { href: "/boletim", label: "Notas", short: "Notas", icon: GraduationCap },
+  { href: "/tarefas", label: "Tarefas", short: "Tarefas", icon: ListTodo },
+  { href: "/apostilas", label: "Apostilas", short: "Apostilas", icon: BookOpen },
+  { href: "/inteligencia-artificial", label: "Inteligência Artificial", short: "IA", icon: Sparkles },
+];
 
 export function AppShell({ children }: { children: ReactNode }) {
   const pathname = useRouterState({ select: (s) => s.location.pathname });
