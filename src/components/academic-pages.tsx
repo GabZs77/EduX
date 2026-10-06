@@ -227,12 +227,15 @@ export function AgendaPage() {
 }
 
 export function PresencaPage() {
-  const { loading } = useStudent();
+  const { dashboard, loading } = useStudent();
   const systemBimestre = currentSchoolBimestre();
   const [rows, setRows] = useState<FrequenciaBimestre[]>([]);
+  const [faltas, setFaltas] = useState<number | null>(dashboard?.faltas ?? null);
   const [busy, setBusy] = useState(true);
   const [error, setError] = useState("");
-  const [periodoSelecionado, setPeriodoSelecionado] = useState<3 | 4 | "year">(() => (systemBimestre === 4 ? 4 : 3));
+  const [periodoSelecionado, setPeriodoSelecionado] = useState<1 | 2 | 3 | 4 | "year">(() =>
+    (systemBimestre >= 1 && systemBimestre <= 4 ? systemBimestre : 1) as 1 | 2 | 3 | 4,
+  );
 
   async function reload() {
     setBusy(true);
@@ -240,6 +243,7 @@ export function PresencaPage() {
     try {
       const result = await fetchFrequencia();
       setRows(result.data || []);
+      setFaltas(result.faltasBimestreAtual ?? result.faltas ?? null);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Não foi possível carregar a frequência.");
     } finally {
@@ -264,22 +268,12 @@ export function PresencaPage() {
       <PageHeading
         eyebrow="Frequência"
         title="Presença"
-        description="Confira a presença do 3º e 4º bimestre ou o percentual do ano inteiro."
+        description="Acompanhe faltas, aulas dadas e o percentual de presença por bimestre."
         onRefresh={() => void reload()}
         spinning={busy || loading}
       />
       {error ? <StateCard error title="Frequência indisponível" message={error} actionLabel="Tentar de novo" onAction={() => void reload()} /> : null}
-      <div className="period-tabs attendance-period-tabs" role="group" aria-label="Período de presença">
-        <button type="button" aria-pressed={periodoSelecionado === 3} className={periodoSelecionado === 3 ? "active" : ""} onClick={() => setPeriodoSelecionado(3)}>
-          3º Bimestre
-        </button>
-        <button type="button" aria-pressed={periodoSelecionado === 4} className={periodoSelecionado === 4 ? "active" : ""} onClick={() => setPeriodoSelecionado(4)}>
-          4º Bimestre
-        </button>
-        <button type="button" aria-pressed={periodoSelecionado === "year"} className={periodoSelecionado === "year" ? "active" : ""} onClick={() => setPeriodoSelecionado("year")}>
-          Ano Inteiro
-        </button>
-      </div>
+
       {periodoSelecionado === "year" ? (
         !busy ? (
           <section className="progress-card attendance-period-card">
@@ -305,35 +299,49 @@ export function PresencaPage() {
         <StateCard title={`${selectedLabel} ainda não está pronto`} message="Esse bimestre ainda não começou no calendário escolar deste ano." />
       ) : !busy && !hasSelectedBimestreData ? (
         <StateCard title={`${selectedLabel} ainda não está pronto`} message="A frequência desse bimestre ainda não foi disponibilizada pela SED." />
-      ) : selectedRow && hasSelectedBimestreData ? (
+      ) : selectedRow ? (
         <>
-          <section className="progress-card attendance-period-card">
+          <section className="stat-grid attendance-stats">
+            <StatCard icon={<CalendarClock size={16} />} label="Faltas no bimestre" value={String(faltas ?? selectedRow.faltas ?? "—")} note="Lançadas na SED" tone="amber" />
+            <StatCard icon={<CalendarDays size={16} />} label="Aulas dadas" value={String(selectedRow.aulasDadas)} note="No período selecionado" tone="cyan" />
+            <StatCard icon={<ListChecks size={16} />} label="Presença" value={selectedRow.frequencia != null ? `${selectedRow.frequencia}%` : "—"} note="Média das disciplinas" tone="green" />
+            <StatCard icon={<BookOpen size={16} />} label="Disciplinas" value={String(selectedRow.disciplinas.length)} note="Com lançamento" />
+          </section>
+          <section className="progress-card">
             <div className="section-heading">
-              <div>
-                <span className="eyebrow">{periodoSelecionado === systemBimestre ? "Bimestre atual" : "Frequência do período"}</span>
-                <h2>{selectedLabel}</h2>
-              </div>
+              <h2>{selectedLabel}</h2>
               <strong>{selectedPercent != null ? `${selectedPercent}%` : "—"}</strong>
             </div>
             <div className="progress-track">
               <span style={{ width: `${Math.max(0, Math.min(100, selectedPercent ?? 0))}%` }} />
             </div>
-            <p className="data-note">
-              <Info size={14} /> {selectedRow.faltas} faltas · {selectedRow.aulasDadas} aulas registradas neste bimestre.
-            </p>
           </section>
-          <div className="period-list">
-            {selectedRow.disciplinas.map((item) => (
-              <article className="period-card" key={item.nomeDisciplina}>
-                <div>
-                  <h3>{item.nomeDisciplina}</h3>
-                  <p>{item.faltas} faltas · {item.presencas} presenças</p>
-                </div>
-                <strong>{item.frequencia != null ? `${item.frequencia}%` : "—"}</strong>
-              </article>
-            ))}
-          </div>
         </>
+      ) : null}
+
+      <div className="period-tabs attendance-period-tabs" role="group" aria-label="Período de presença">
+        {[1, 2, 3, 4].map((bimestre) => (
+          <button key={bimestre} type="button" aria-pressed={periodoSelecionado === bimestre} className={periodoSelecionado === bimestre ? "active" : ""} onClick={() => setPeriodoSelecionado(bimestre as 1 | 2 | 3 | 4)}>
+            {bimestre}º Bimestre
+          </button>
+        ))}
+        <button type="button" aria-pressed={periodoSelecionado === "year"} className={periodoSelecionado === "year" ? "active" : ""} onClick={() => setPeriodoSelecionado("year")}>
+          Ano Inteiro
+        </button>
+      </div>
+
+      {!busy && periodoSelecionado !== "year" && selectedRow && hasSelectedBimestreData ? (
+        <div className="period-list">
+          {selectedRow.disciplinas.map((item) => (
+            <article className="period-card" key={item.nomeDisciplina}>
+              <div>
+                <h3>{item.nomeDisciplina}</h3>
+                <p>{item.faltas} faltas · {item.presencas} presenças</p>
+              </div>
+              <strong>{item.frequencia != null ? `${item.frequencia}%` : "—"}</strong>
+            </article>
+          ))}
+        </div>
       ) : null}
     </div>
   );
