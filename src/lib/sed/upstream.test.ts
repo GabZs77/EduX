@@ -116,13 +116,13 @@ test("renova o token EduSP antes de buscar tarefas no dashboard", async () => {
   }
 });
 
-test("usa respostas pendentes como fallback quando a rota todo falha", async () => {
+test("não consulta respostas pendentes nem cria cascata quando a rota todo falha", async () => {
   const originalFetch = globalThis.fetch;
   const answerHeaders: { authorization: string; token2: string }[] = [];
   globalThis.fetch = async (input: RequestInfo | URL, init: RequestInit = {}) => {
     const url = new URL(typeof input === "string" ? input : input instanceof URL ? input : input.url);
     if (url.pathname === "/registration/edusp/token") {
-      return new Response(JSON.stringify({ auth_token: "fresh-edusp-token", nick: "student-fresh-sp" }), {
+      return new Response(JSON.stringify({ auth_token: "fresh-edusp-token-503", nick: "student-fresh-sp" }), {
         status: 200,
         headers: { "content-type": "application/json" },
       });
@@ -171,10 +171,43 @@ test("usa respostas pendentes como fallback quando a rota todo falha", async () 
     const data = await response.json();
 
     assert.equal(response.status, 200);
-    assert.deepEqual(data.tarefas.map((task: { title: string }) => task.title), ["Tarefa recuperada"]);
-    assert.equal(data.tarefasApiOk, true);
-    assert(answerHeaders.length > 0);
-    assert(answerHeaders.every(({ authorization, token2 }) => authorization === "Bearer fresh-edusp-token" && token2 === "fresh-edusp-token"));
+    assert.deepEqual(data.tarefas, []);
+    assert.equal(data.tarefasApiOk, false);
+    assert.equal(data.tarefasApiStatus, 503);
+    assert.equal(answerHeaders.length, 0);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("interrompe a consulta de tarefas em 403 sem tentar /tms/answer", async () => {
+  const originalFetch = globalThis.fetch;
+  const taskCalls: string[] = [];
+  globalThis.fetch = async (input: RequestInfo | URL, init: RequestInit = {}) => {
+    const url = new URL(typeof input === "string" ? input : input instanceof URL ? input : input.url);
+    if (url.pathname === "/registration/edusp/token") {
+      return new Response(JSON.stringify({ auth_token: "fresh-edusp-token-403", nick: "student-fresh-sp" }), { status: 200 });
+    }
+    if (url.pathname === "/room/user") {
+      return new Response(JSON.stringify({ rooms: [{ name: "room-test", group_categories: [] }] }), { status: 200 });
+    }
+    if (url.pathname === "/tms/task/todo") {
+      taskCalls.push(`${init.method || "GET"} ${url.pathname}`);
+      return new Response("<html>Cloudflare</html>", { status: 403, headers: { "content-type": "text/html" } });
+    }
+    if (url.pathname === "/tms/answer") throw new Error("/tms/answer não deveria ser consultado");
+    return new Response(JSON.stringify({}), { status: 200 });
+  };
+
+  try {
+    const response = await handleSedRequest(new Request("https://local.test/dashboard", {
+      headers: { "X-Token": "valid-sed-token", "X-Token2": "expired-edusp-token", "X-Cd-Usuario": "12345678", "X-Task-User": "student-old-sp" },
+    }));
+    const data = await response.json();
+    assert.equal(response.status, 200);
+    assert.deepEqual(data.tarefas, []);
+    assert.equal(data.tarefasApiStatus, 403);
+    assert.equal(taskCalls.length, 1);
   } finally {
     globalThis.fetch = originalFetch;
   }

@@ -19,6 +19,10 @@ const GROQ_API_KEY = "";
 const GROQ_URL = "https://api.x.ai/v1/chat/completions";
 const XAI_URL = "https://api.x.ai/v1/chat/completions";
 
+const TASK_COOLDOWN_MS = 8000;
+const taskRequestState = new Map();
+const taskRequestInFlight = new Map();
+
 // Notificações: sem KV/D1/R2. O Worker mantém a lista no runtime atual.
 // O frontend também guarda um cache no localStorage para sobreviver a recarregamentos.
 // Observação: sem um banco/KV externo, nenhuma solução no Worker puro garante
@@ -84,32 +88,32 @@ async function exchangeEduspToken(token) {
       "sec-fetch-site": "same-site",
       "sec-fetch-dest": "empty",
     },
-    {
-      ...UPSTREAM_HEADERS,
-      "content-type": "application/json",
-      "x-api-platform": "webclient",
-      "x-api-realm": "edusp",
-    },
   ];
   let lastResp = null;
   let lastData = null;
   let lastError = null;
-  for (let attempt = 0; attempt < 3; attempt += 1) {
+  for (let attempt = 0; attempt < 2; attempt += 1) {
     try {
       const resp = await fetch(IPTV_TOKEN_URL, {
         method: "POST",
-        headers: headerVariants[Math.min(attempt, headerVariants.length - 1)],
+        headers: headerVariants[0],
         body: JSON.stringify({ token }),
       });
       const data = await readJson(resp);
       lastResp = resp;
       lastData = data;
       if (resp.ok && data?.auth_token) return { resp, data };
-      if (![403, 429, 500, 502, 503, 504].includes(resp.status)) break;
+      if (resp.status < 500 || resp.status > 599 || attempt === 1) {
+        console.info(`[EduX] exchangeEduspToken: HTTP ${resp.status}; nova tentativa: não`);
+        break;
+      }
+      console.info(`[EduX] exchangeEduspToken: HTTP ${resp.status}; nova tentativa: sim, única retry de 5xx`);
     } catch (error) {
       lastError = error;
+      if (attempt === 1) break;
+      console.info("[EduX] exchangeEduspToken: erro de rede; nova tentativa: sim, única retry controlada");
     }
-    if (attempt < 2) await new Promise((resolve) => setTimeout(resolve, 350 * (attempt + 1)));
+    if (attempt === 0) await new Promise((resolve) => setTimeout(resolve, 500));
   }
   return {
     resp: lastResp || { ok: false, status: 502 },
@@ -470,7 +474,21 @@ function chunkTargets(targets, maxChars = 1600) {
   return chunks.length ? chunks : [[]];
 }
 
-async function fetchTasksForTargets(token2, targets, options = {}) {
+function retryAfterMs(resp) {
+  const value = String(resp?.headers?.get?.("retry-after") || "").trim();
+  if (!value) return 0;
+  const seconds = Number(value);
+  if (Number.isFinite(seconds) && seconds > 0) return Math.min(seconds * 1000, 30000);
+  const date = Date.parse(value);
+  return Number.isFinite(date) ? Math.max(0, Math.min(date - Date.now(), 30000)) : 0;
+}
+
+function taskRequestLog(context, status, retries, reason) {
+  context.retries += retries;
+  console.info(`[EduX] /tms/task/todo request=${context.requests} status=${status || 0} retries=${retries} next=${reason}`);
+}
+
+async function fetchTasksForTargets(token2, targets, options = {}, context = { requests: 0, retries: 0 }) {
   const params = new URLSearchParams();
   params.set("expired_only", options.expiredOnly ? "true" : "false");
   params.set("limit", "100");
@@ -491,47 +509,42 @@ async function fetchTasksForTargets(token2, targets, options = {}) {
   let lastResp = null;
   let lastData = null;
   for (const chunk of chunks) {
-    const resp = await fetch(`${EDUSP_BASE}/tms/task/todo?${todoQueryString(params, chunk)}`, { headers });
-    const data = await readJson(resp);
+    let resp;
+    let data;
+    let retries = 0;
+    try {
+      context.requests += 1;
+      resp = await fetch(`${EDUSP_BASE}/tms/task/todo?${todoQueryString(params, chunk)}`, { headers });
+      data = await readJson(resp);
+      if (resp.status >= 500 && resp.status <= 599) {
+        await new Promise((resolve) => setTimeout(resolve, 500));
+        retries = 1;
+        context.requests += 1;
+        resp = await fetch(`${EDUSP_BASE}/tms/task/todo?${todoQueryString(params, chunk)}`, { headers });
+        data = await readJson(resp);
+      }
+    } catch (error) {
+      taskRequestLog(context, 0, retries, "não: erro de rede");
+      return { resp: { ok: false, status: 0 }, data: { erro: String(error?.message || error || "Falha de rede") }, tasks: merged, context };
+    }
     lastResp = resp;
     lastData = data;
-    if (resp.ok) merged.push(...extractTasks(data));
+    const stopReason = resp.ok
+      ? "sim: próximo bloco necessário"
+      : resp.status === 401
+        ? "não: autenticação recusada"
+        : resp.status === 403
+          ? "não: serviço recusou temporariamente"
+          : resp.status === 429
+            ? "não: limite de requisições; cooldown respeitado"
+            : resp.status >= 500
+              ? "não: retry único já consumido"
+              : "não: erro não transitório";
+    taskRequestLog(context, resp.status, retries, stopReason);
+    if (!resp.ok) return { resp, data, tasks: merged, context };
+    merged.push(...extractTasks(data));
   }
-  return { resp: lastResp, data: lastData, tasks: merged };
-}
-
-async function fetchPendingAnswers(token2, nick, targets, isEssay, answerStatus = "pending") {
-  if (!token2 || !nick || !Array.isArray(targets) || !targets.length) {
-    return { ok: false, status: 400, data: [] };
-  }
-  const url = new URL(`${EDUSP_BASE}/tms/answer`);
-  url.searchParams.set("nick", nick);
-  url.searchParams.set("limit", "100");
-  url.searchParams.set("offset", "0");
-  url.searchParams.set("task_is_exam", "false");
-  url.searchParams.set("task_is_essay", isEssay ? "true" : "false");
-  url.searchParams.set("status", answerStatus);
-  url.searchParams.set("order", "asc");
-  url.searchParams.set("order_by", "task_id");
-  url.searchParams.set("with_apply_moment", "true");
-  for (const target of targets) url.searchParams.append("publication_target", String(target));
-  for (const field of ["id", "status", "task_id", "publication_target", "task.title", "task.is_essay", "task.expire_at", "task.publish_at", "task.description"]) {
-    url.searchParams.append("fields", field);
-  }
-  const headers = {
-    ...UPSTREAM_HEADERS,
-    Authorization: `Bearer ${token2}`,
-    "X-Token2": token2,
-    "x-api-platform": "webclient",
-    "x-api-realm": "edusp",
-    "x-api-key": token2,
-  };
-  try {
-    const resp = await fetch(url.toString(), { headers, cache: "no-store" });
-    return { ok: resp.ok, status: resp.status, data: await readJson(resp) };
-  } catch (error) {
-    return { ok: false, status: 0, data: { erro: String(error?.message || error || "Falha ao consultar respostas pendentes.") } };
-  }
+  return { resp: lastResp, data: lastData, tasks: merged, context };
 }
 
 async function fetchEduspRooms(token2) {
@@ -596,6 +609,33 @@ function mergeTodoPages(pages) {
 }
 
 async function fetchTasks(token2, rooms, username) {
+  const cacheKey = `${String(token2 || "")}:${String(username || "")}`;
+  const now = Date.now();
+  const cached = taskRequestState.get(cacheKey);
+  if (cached && now < cached.cooldownUntil) {
+    console.info("[EduX] tarefas: resultado reutilizado; nova consulta: não, cooldown ativo");
+    return cached.result;
+  }
+  const running = taskRequestInFlight.get(cacheKey);
+  if (running) {
+    console.info("[EduX] tarefas: consulta já em andamento; nova consulta: não, reutilizando request");
+    return running;
+  }
+
+  const requestPromise = fetchTasksOnce(token2, rooms, username);
+  taskRequestInFlight.set(cacheKey, requestPromise);
+  let result;
+  try {
+    result = await requestPromise;
+  } finally {
+    taskRequestInFlight.delete(cacheKey);
+  }
+  const cooldown = result.status === 429 ? Math.max(TASK_COOLDOWN_MS, retryAfterMs(result.rawResponse)) : TASK_COOLDOWN_MS;
+  taskRequestState.set(cacheKey, { cooldownUntil: Date.now() + cooldown, result });
+  return result;
+}
+
+async function fetchTasksOnce(token2, rooms, username) {
   const nick = String(username || "").trim();
   const eduspRooms = await fetchEduspRooms(token2);
   const baseTargets = collectRoomTargets(eduspRooms, nick);
@@ -611,81 +651,9 @@ async function fetchTasks(token2, rooms, username) {
     for (const target of EXTRA_TARGETS) addUnique(baseTargets, target);
   }
 
-  // Cliente oficial (HAR): pendentes sem answer_statuses + rascunhos + expiradas,
-  // para tarefas e redações. Pendentes nunca devem ir junto com "draft".
-  const queries = [
-    { statuses: null, expiredOnly: false, filterExpired: true, isEssay: false },
-    { statuses: ["draft"], expiredOnly: false, filterExpired: true, isEssay: false },
-    { statuses: ["draft"], expiredOnly: true, filterExpired: false, isEssay: false },
-    { statuses: null, expiredOnly: false, filterExpired: true, isEssay: true },
-    { statuses: ["draft"], expiredOnly: false, filterExpired: true, isEssay: true },
-    { statuses: ["draft"], expiredOnly: true, filterExpired: false, isEssay: true },
-  ];
-
-  let lastResp = null;
-  let lastData = null;
-  const pages = [];
-
-  const results = await Promise.all(queries.map((query) => fetchTasksForTargets(token2, baseTargets, query)));
-  results.forEach((result, index) => {
-    lastResp = result.resp;
-    lastData = result.data;
-    if (!result.resp?.ok) return;
-    const expired = Boolean(queries[index].expiredOnly);
-    const list = (result.tasks?.length ? result.tasks : extractTasks(result.data)).map((task) => (expired ? { ...task, __expired: true } : task));
-    pages.push(list);
-  });
-
-  const pendingEmpty = queries.every((query, index) => query.statuses || query.expiredOnly || !pages[index]?.length);
-  if (pendingEmpty && (eduspRooms.length || baseTargets.length)) {
-    const perRoom = [];
-    const roomGroups = eduspRooms.length
-      ? eduspRooms.map((room) => collectRoomTargets([room], nick))
-      : baseTargets.map((target) => [target]);
-    for (const group of roomGroups) {
-      if (!group.length) continue;
-      const one = await fetchTasksForTargets(token2, group, { statuses: null, expiredOnly: false, filterExpired: true, isEssay: false });
-      lastResp = one.resp;
-      lastData = one.data;
-      if (one.resp?.ok) perRoom.push(...(one.tasks?.length ? one.tasks : extractTasks(one.data)));
-    }
-    if (perRoom.length) pages.push(perRoom);
-  }
-
-  if (!pages.some((page) => page.length)) {
-    const open = await fetchTasksForTargets(token2, [], { statuses: null, expiredOnly: false, filterExpired: true, isEssay: false });
-    lastResp = open.resp;
-    lastData = open.data;
-    if (open.resp?.ok) pages.push(open.tasks?.length ? open.tasks : extractTasks(open.data));
-  }
-
-  const answerFallbackTasks = [];
-  if (!mergeTodoPages(pages).length && nick && baseTargets.length) {
-    const studentNick = `${nick.replace(/-sp$/i, "")}-sp`;
-    for (const isEssay of [false, true]) {
-      for (const answerStatus of ["pending", "draft"]) {
-        const result = await fetchPendingAnswers(token2, studentNick, baseTargets, isEssay, answerStatus);
-        lastResp = { ok: result.ok, status: result.status };
-        lastData = result.data;
-        if (!result.ok) continue;
-        const answers = extractTasks(result.data);
-        answerFallbackTasks.push(...answers.map((answer) => {
-          const task = answer?.task && typeof answer.task === "object" ? answer.task : answer;
-          return {
-            ...task,
-            id: answer?.task_id ?? task?.id ?? answer?.id,
-            answer_status: answer?.status ?? answer?.answer_status ?? task?.answer_status,
-            publication_target: answer?.publication_target ?? task?.publication_target,
-            is_essay: task?.is_essay ?? answer?.task_is_essay ?? isEssay,
-          };
-        }));
-        if (answerFallbackTasks.length) break;
-      }
-      if (answerFallbackTasks.length) break;
-    }
-  }
-
-  const rawTasks = mergeTodoPages([...pages, answerFallbackTasks]);
+  const context = { requests: 0, retries: 0 };
+  const result = await fetchTasksForTargets(token2, baseTargets, { statuses: null, expiredOnly: false, filterExpired: true, isEssay: false }, context);
+  const rawTasks = result.resp?.ok ? mergeTodoPages([result.tasks?.length ? result.tasks : extractTasks(result.data)]) : [];
   const seen = new Set();
   const tasks = [];
   for (const raw of rawTasks) {
@@ -696,7 +664,8 @@ async function fetchTasks(token2, rooms, username) {
     if (isSubmittedAnswer(normalized.status)) continue;
     tasks.push(normalized);
   }
-  return { ok: lastResp ? Boolean(lastResp.ok) : true, status: lastResp?.status ?? 200, tasks, targets: baseTargets, raw: lastData };
+  console.info(`[EduX] tarefas: requests=${context.requests} retries=${context.retries} status=${result.resp?.status ?? 200}`);
+  return { ok: result.resp ? Boolean(result.resp.ok) : true, status: result.resp?.status ?? 200, tasks, targets: baseTargets, raw: result.data, rawResponse: result.resp };
 }
 
 

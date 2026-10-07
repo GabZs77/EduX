@@ -4,6 +4,7 @@ import {
   useContext,
   useEffect,
   useMemo,
+  useRef,
   useState,
   type ReactNode,
 } from "react";
@@ -37,6 +38,7 @@ export function StudentProvider({ children }: { children: ReactNode }) {
   const [dashboard, setDashboard] = useState<Dashboard | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const refreshInFlight = useRef<Promise<void> | null>(null);
 
   useEffect(() => {
     setSession(readSession());
@@ -44,21 +46,30 @@ export function StudentProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const refresh = useCallback(async () => {
-    const current = readSession();
-    if (!current?.token2) {
-      setDashboard(null);
-      setLoading(false);
-      return;
-    }
-    setLoading(true);
+    if (refreshInFlight.current) return refreshInFlight.current;
+    const run = (async () => {
+      const current = readSession();
+      if (!current?.token2) {
+        setDashboard(null);
+        setLoading(false);
+        return;
+      }
+      setLoading(true);
+      try {
+        const data = await fetchDashboard();
+        setDashboard(data);
+        setError(null);
+      } catch (err) {
+        setError(err instanceof Error ? err.message : "Não foi possível atualizar os dados.");
+      } finally {
+        setLoading(false);
+      }
+    })();
+    refreshInFlight.current = run;
     try {
-      const data = await fetchDashboard();
-      setDashboard(data);
-      setError(null);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Não foi possível atualizar os dados.");
+      await run;
     } finally {
-      setLoading(false);
+      refreshInFlight.current = null;
     }
   }, []);
 
